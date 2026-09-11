@@ -1,8 +1,8 @@
 # asistentas
 
 Asmeninis AI asistentas, veikiantis tavo terminale. Claude Opus 5 protas,
-paieška internete, tavo paties parašytas charakteris, pokalbiai lieka tavo
-kompiuteryje.
+paieška internete, ilgalaikė atmintis, prieiga prie tavo failų ir tavo paties
+parašytas charakteris. Pokalbiai ir atmintis lieka tavo kompiuteryje.
 
 ```
 tu ▸ kiek dabar kainuoja elektra?
@@ -51,6 +51,8 @@ Pokalbyje:
 | `/modelis`, `/pastangos` | pakeisti modelį ar mąstymo gylį |
 | `/paieska on\|off` | paieška internete |
 | `/mastymas on\|off` | rodyti, ką modelis galvoja |
+| `/atmintis` | ką jis apie tave įsiminė (`viskas` — turinys, `pamirsk` — ištrinti) |
+| `/failai` | kuriuos katalogus jis mato |
 | `/asmenybe` | kur redaguoti charakterį |
 
 `Ctrl+C` nutraukia atsakymą (asistentas lieka veikti), `Ctrl+D` išeina.
@@ -63,7 +65,8 @@ Viskas gyvena `~/.asistentas/`:
 ```
 ~/.asistentas/
 ├── asmenybe.md      ← charakteris: tonas, kalba, ko niekada nedaryti
-├── config.toml      ← modelis, pastangos, paieška, vieta
+├── config.toml      ← modelis, pastangos, paieška, vieta, failai, MCP
+├── atmintis/        ← ką jis apie tave žino (paprasti tekstiniai failai)
 ├── istorija         ← klausimų istorija (rodyklės aukštyn)
 └── sesijos/         ← pokalbiai JSON formatu
 ```
@@ -83,7 +86,70 @@ paieskos_limitas = 5
 salis = "LT"
 laiko_juosta = "Europe/Vilnius"
 # leidziami_domenai = ["lrt.lt", "delfi.lt"]   # ieškoti tik čia
+
+atmintis = true
+# failu_katalogai = ["~/Dokumentai", "~/uzrasai"]
 ```
+
+## Atmintis
+
+Įjungta iš karto. Asistentas pats nusprendžia, ką verta įsiminti — vardą,
+kalbą, įrankius, pasikartojančius darbus — ir kitą kartą to nebeklausia:
+
+```
+tu ▸ nuo šiol atsakinėk trumpiau, be įžangų
+
+🧠 įsimenu
+Gerai.
+```
+
+Atmintis — tai paprasti tekstiniai failai `~/.asistentas/atmintis/`. Gali juos
+atsiversti, pataisyti ranka arba ištrinti: `/atmintis` parodo, kas ten yra,
+`/atmintis viskas` — visą turinį, `/atmintis pamirsk` — išvalo viską.
+Slaptažodžių, kodų ir banko duomenų įsiminti jam liepta niekada.
+
+Išjungti: `atmintis = false`.
+
+## Tavo failai
+
+Kol `failu_katalogai` tuščias, asistentas tavo failų **nemato iš viso** — tų
+įrankių jam net nesiunčiame. Nurodžius katalogus, jis gali juose ieškoti ir
+skaityti:
+
+```
+tu ▸ kada mano projekto terminas?
+
+📂 ieškau failuose: terminas
+📄 skaitau: darbas/planas.md
+Projekto X terminas — spalio 1 d.
+```
+
+Tik skaitymas: failų jis nekeičia ir netrina. Keliai tikrinami pagal tavo
+sąrašą — už jo ribų neišeina net simbolinė nuoroda, `..` ar absoliutus kelias.
+Paslėpti katalogai (`.git`, `.ssh` ir pan.) praleidžiami, dvejetainiai failai
+neskaitomi.
+
+## Gmail, kalendorius ir kita (MCP)
+
+Vietoj atskiro kodo kiekvienai paslaugai asistentas jungiasi prie **MCP
+serverių** — tai standartas, kuriuo Gmail, kalendorius, Slack ar Notion
+pasiūlo savo įrankius. Nurodai serverį, ir jo įrankiai atsiranda pokalbyje:
+
+```toml
+[[mcp]]
+pavadinimas = "gmail"
+url = "https://mcp.pavyzdys.lt/gmail"
+token_env = "GMAIL_MCP_TOKEN"     # raktas – aplinkos kintamajame, ne čia
+```
+
+```bash
+export GMAIL_MCP_TOKEN=...
+```
+
+Prisijungimą atlieka Anthropic serveriai, tad tau nereikia nei OAuth kodo, nei
+bibliotekų. Adresas privalo būti `https://`; raktas į `config.toml` nerašomas
+niekada. Veikiančio MCP serverio reikės susirasti arba pasileisti pačiam —
+šis projektas prie jo tik prisijungia.
 
 ## Kiek tai kainuoja
 
@@ -107,19 +173,27 @@ mažiau (footeryje tada matai žodį „talpykla").
 
 ```
 cli.py       pokalbio ciklas, komandos, klaidos žmogiškai
-agent.py     užklausos Claude API: srautas, paieška, tęsimas, atsisakymai
+agent.py     užklausos Claude API: srautas, įrankių ciklas, tęsimas
 render.py    markdown → terminalas, nelaukiant atsakymo pabaigos
+memory.py    ilgalaikė atmintis (Anthropic atminties įrankis)
+files.py     tavo failų paieška ir skaitymas, griežtai ribotuose kataloguose
 session.py   pokalbiai JSON failuose
-config.py    nustatymai ir asmenybė
+config.py    nustatymai, asmenybė, MCP serveriai
 pricing.py   žetonai ir kaina
 lt.py        lietuviška daugiskaita
 ```
 
 Keli sprendimai, kurie nėra akivaizdūs:
 
-- **Paieška vyksta Anthropic serveriuose** (`web_search` įrankis), todėl
-  nereikia nei paieškos API rakto, nei HTML skaitymo. Modelis pats nusprendžia,
-  kada ieškoti; tu matai, ko jis ieškojo.
+- **Paieška ir MCP vyksta Anthropic serveriuose**, o atmintis ir failai — tavo
+  kompiuteryje. Todėl vienam klausimui gali prireikti kelių apsikeitimų su API:
+  modelis paprašo įrankio, mes jį įvykdome ir grąžiname rezultatą. Ciklas
+  ribotas 16 žingsnių, kad klaida nesuktų rato ir nekainuotų.
+- **Visi vieno žingsnio įrankių rezultatai grąžinami viena žinute** — kitaip
+  modelis palaipsniui nustoja kviesti įrankius lygiagrečiai.
+- **Nutraukus (Ctrl+C) įrankių ciklą** pakibęs iškvietimas uždaromas klaidos
+  rezultatu: API reikalauja, kad po kiekvieno `tool_use` eitų `tool_result`,
+  antraip kita užklausa nulūžtų.
 - **Šiandienos data** siunčiama atskira `system` žinute, o ne sistemos prompte:
   taip promptas nesikeičia ir lieka talpykloje. Modeliams, kurie tokių žinučių
   nepriima, data keliauja į promptą.
@@ -132,15 +206,22 @@ Keli sprendimai, kurie nėra akivaizdūs:
 
 ## Privatumas
 
-Pokalbiai guli tik tavo kompiuteryje (`~/.asistentas/sesijos/`, teisės 600).
-Klausimai keliauja į Anthropic API — tiek, kiek reikia atsakymui. Paieškos
-užklausas mato ir paieškos tiekėjas. Jei nori visiškai neišeiti iš kompiuterio,
-reikėtų vietinio modelio (Ollama) — tai jau kitas projektas.
+Pokalbiai ir atmintis guli tik tavo kompiuteryje (`~/.asistentas/`, teisės 600).
+Bet viskas, ką modelis mato, keliauja į Anthropic API: klausimai, atminties
+turinys ir tie failų fragmentai, kuriuos jis perskaito. Paieškos užklausas mato
+ir paieškos tiekėjas.
+
+Praktiškai tai reiškia: į `failu_katalogai` dėk tik tai, ką nebijotum parodyti.
+Ne visą `~`. Atmintį bet kada peržiūrėsi ir ištrinsi (`/atmintis`), o jei nori,
+kad niekas iš viso neišeitų iš kompiuterio, reikėtų vietinio modelio (Ollama) —
+tai jau kitas projektas.
 
 ## Testai
 
 ```bash
-pip install pytest && pytest -q      # 109 testų, tinklo neliečia
+pip install pytest && pytest -q      # 179 testai, tinklo neliečia
 ```
 
 Testai naudoja suklastotą API klientą, todėl nieko nekainuoja ir veikia be rakto.
+Atskirai tikrinama, kad nei atminties, nei failų įrankis neišeitų už jam skirtų
+katalogų — kelius siūlo modelis, tad tai ne smulkmena.

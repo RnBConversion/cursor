@@ -96,14 +96,14 @@ def test_nutraukto_klausimo_pasalinimas():
     s.add_assistant([{"type": "text", "text": "atsakymas"}])
     s.add_user("antras")
     s.add_system("Šiandien 2026-09-11.")
-    s.drop_last_user()
+    s.rollback_turn()
     assert [m["role"] for m in s.messages] == ["user", "assistant"]
 
 
 def test_pasalinimas_tusciame_pokalbyje():
     s = Session()
     s.add_user("vienintelis")
-    s.drop_last_user()
+    s.rollback_turn()
     assert s.messages == []
 
 

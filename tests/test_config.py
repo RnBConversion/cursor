@@ -80,3 +80,57 @@ def test_zinome_kurie_modeliai_priima_sistemos_zinutes(home):
 def test_no_color(home, monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1")
     assert config.load(home=home).color is False
+
+
+def test_atmintis_ir_failai_is_toml(home):
+    config.bootstrap(home)
+    (home / "config.toml").write_text(
+        'atmintis = false\nfailu_katalogai = ["~/Dokumentai", "/tmp"]\nfailu_dydzio_riba = 1000\n',
+        encoding="utf-8",
+    )
+    cfg = config.load(home=home)
+    assert cfg.memory is False
+    assert cfg.files_roots == ("~/Dokumentai", "/tmp")
+    assert cfg.max_file_bytes == 1000
+    assert cfg.memory_dir == home / "atmintis"
+
+
+def test_failu_katalogai_numatytai_tusti(home):
+    """Kol nenurodai, kur žiūrėti, asistentas tavo failų nemato."""
+    assert config.load(home=home).files_roots == ()
+
+
+def test_mcp_serveriai(home):
+    config.bootstrap(home)
+    (home / "config.toml").write_text(
+        '[[mcp]]\npavadinimas = "gmail"\nurl = "https://mcp.pvz.lt/gmail"\ntoken_env = "GMAIL_TOKEN"\n'
+        '[[mcp]]\npavadinimas = "kalendorius"\nurl = "https://mcp.pvz.lt/cal"\n',
+        encoding="utf-8",
+    )
+    serveriai = config.load(home=home).mcp_servers
+    assert [s["pavadinimas"] for s in serveriai] == ["gmail", "kalendorius"]
+    assert serveriai[0]["token_env"] == "GMAIL_TOKEN"
+    assert serveriai[1]["token_env"] is None
+
+
+@pytest.mark.parametrize(
+    "turinys, klaida",
+    [
+        ('[[mcp]]\nurl = "https://x.lt"\n', "būtini"),
+        ('[[mcp]]\npavadinimas = "a"\n', "būtini"),
+        ('[[mcp]]\npavadinimas = "a"\nurl = "http://x.lt"\n', "https"),
+        ('[[mcp]]\npavadinimas = "a"\nurl = "https://x.lt"\n[[mcp]]\npavadinimas = "a"\nurl = "https://y.lt"\n', "kartojasi"),
+        ('mcp = "gmail"\n', "sąrašas"),
+    ],
+)
+def test_blogi_mcp_nustatymai(home, turinys, klaida):
+    config.bootstrap(home)
+    (home / "config.toml").write_text(turinys, encoding="utf-8")
+    with pytest.raises(config.ConfigError, match=klaida):
+        config.load(home=home)
+
+
+def test_raktai_nelaikomi_nustatymuose(home):
+    """Prieigos raktas nurodomas aplinkos kintamojo vardu, ne pačiu raktu."""
+    assert "token_env" in config.DEFAULT_CONFIG_TOML
+    assert "sk-ant" not in config.DEFAULT_CONFIG_TOML

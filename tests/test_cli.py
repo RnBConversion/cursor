@@ -187,3 +187,54 @@ def test_main_be_klausimo_is_duodeles(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("sys.stdin", type("S", (), {"isatty": lambda self: False, "read": lambda self: ""})())
     assert cli.main([]) == 2
     assert "Nėra klausimo" in capsys.readouterr().err
+
+
+# ---- atmintis ir failai -------------------------------------------------
+
+
+def test_atmintis_tuscia(cfg, capsys):
+    app(cfg)._command("/atmintis")
+    assert "tuščia" in capsys.readouterr().out
+
+
+def test_atmintis_rodo_ir_istrina(cfg, capsys, monkeypatch):
+    from asistentas.memory import MemoryStore
+
+    store = MemoryStore(cfg.memory_dir)
+    store.call({"command": "create", "path": "/memories/apie.md", "file_text": "Vardas: R"})
+    a = app(cfg)
+
+    a._command("/atmintis")
+    assert "/memories/apie.md" in capsys.readouterr().out
+    a._command("/atmintis viskas")
+    assert "Vardas: R" in capsys.readouterr().out
+
+    monkeypatch.setattr("builtins.input", lambda *_: "ne")
+    a._command("/atmintis pamirsk")
+    assert store.files()                       # neišdrįsus — lieka
+
+    monkeypatch.setattr("builtins.input", lambda *_: "taip")
+    a._command("/atmintis pamirsk")
+    assert store.files() == []
+    assert "ištrinta" in capsys.readouterr().out
+
+
+def test_atmintis_isjungta(cfg, capsys):
+    app(cfg.with_(memory=False))._command("/atmintis")
+    assert "išjungta" in capsys.readouterr().out
+
+
+def test_failai_be_nustatymu(cfg, capsys):
+    app(cfg)._command("/failai")
+    assert "nenurodyti" in capsys.readouterr().out
+
+
+def test_failai_rodo_katalogus(cfg, capsys, tmp_path):
+    katalogas = tmp_path / "uzrasai"
+    katalogas.mkdir()
+    a = app(cfg.with_(files_roots=(str(katalogas), str(tmp_path / "nera"))))
+    a._command("/failai")
+    isvestis = capsys.readouterr().out
+    assert str(katalogas) in isvestis
+    assert "(nerastas)" in isvestis          # klaidingas kelias matomas iš karto
+    assert "skaitoma tik" in isvestis

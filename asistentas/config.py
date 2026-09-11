@@ -72,6 +72,21 @@ salis = "LT"
 laiko_juosta = "Europe/Vilnius"
 # miestas = "Vilnius"
 # regionas = "Vilniaus apskritis"
+
+# Ilgalaikė atmintis: ką asistentas žino apie tave tarp pokalbių.
+# Turinys — paprasti tekstiniai failai ~/.asistentas/atmintis/.
+atmintis = true
+
+# Tavo failai. Kol sąrašas tuščias, asistentas jų nemato iš viso.
+# Nurodyti katalogai skaitomi (bet niekada nekeičiami ir netrinami).
+# failu_katalogai = ["~/Dokumentai", "~/uzrasai"]
+
+# MCP serveriai — Gmail, kalendorius, Slack ir kt.
+# Prieigos raktas laikomas aplinkos kintamajame, ne šiame faile.
+# [[mcp]]
+# pavadinimas = "gmail"
+# url = "https://mcp.pavyzdys.lt/gmail"
+# token_env = "GMAIL_MCP_TOKEN"
 """
 
 
@@ -94,6 +109,10 @@ class Config:
     search_tool_type: str = DEFAULT_SEARCH_TOOL
     allowed_domains: tuple[str, ...] = ()
     blocked_domains: tuple[str, ...] = ()
+    memory: bool = True
+    files_roots: tuple[str, ...] = ()
+    max_file_bytes: int = 400_000
+    mcp_servers: tuple[dict, ...] = ()
     country: str | None = "LT"
     city: str | None = None
     region: str | None = None
@@ -104,6 +123,10 @@ class Config:
     @property
     def sessions_dir(self) -> Path:
         return self.home / "sesijos"
+
+    @property
+    def memory_dir(self) -> Path:
+        return self.home / "atmintis"
 
     @property
     def persona_path(self) -> Path:
@@ -129,8 +152,9 @@ class ConfigError(Exception):
     """Blogi nustatymai — parodome žmogui suprantamą žinutę."""
 
 
-def bootstrap(home: Path) -> None:
+def bootstrap(home: Path | str) -> None:
     """Pirmo paleidimo metu sukuria ~/.asistentas su pavyzdiniais failais."""
+    home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
     try:
         home.chmod(0o700)  # pokalbiai yra asmeniniai
@@ -153,6 +177,29 @@ def _read_toml(path: Path) -> dict:
             return tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path} sugadintas: {e}") from e
+
+
+def _mcp(raw) -> tuple[dict, ...]:
+    """MCP serveriai: Gmail, kalendorius ir visa kita, kas kalba MCP kalba."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError("`[[mcp]]` turi būti lentelių sąrašas")
+    servers, names = [], set()
+    for i, entry in enumerate(raw, 1):
+        if not isinstance(entry, dict):
+            raise ConfigError(f"[[mcp]] #{i}: turi būti lentelė")
+        name = str(entry.get("pavadinimas") or "").strip()
+        url = str(entry.get("url") or "").strip()
+        if not name or not url:
+            raise ConfigError(f"[[mcp]] #{i}: būtini `pavadinimas` ir `url`")
+        if not url.startswith("https://"):
+            raise ConfigError(f"[[mcp]] `{name}`: adresas turi prasidėti https://")
+        if name in names:
+            raise ConfigError(f"[[mcp]] pavadinimas `{name}` kartojasi")
+        names.add(name)
+        servers.append({"pavadinimas": name, "url": url, "token_env": entry.get("token_env")})
+    return tuple(servers)
 
 
 def _strings(raw, laukas: str) -> tuple[str, ...]:
@@ -190,6 +237,10 @@ def load(home: Path | None = None, *, create: bool = True) -> Config:
         search_max_uses=int(data.get("paieskos_limitas", 5)),
         allowed_domains=allowed,
         blocked_domains=blocked,
+        memory=bool(data.get("atmintis", True)),
+        files_roots=_strings(data.get("failu_katalogai"), "failu_katalogai"),
+        max_file_bytes=int(data.get("failu_dydzio_riba", 400_000)),
+        mcp_servers=_mcp(data.get("mcp")),
         country=data.get("salis", "LT"),
         city=data.get("miestas"),
         region=data.get("regionas"),

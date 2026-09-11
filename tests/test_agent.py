@@ -1,9 +1,9 @@
 import io
 
 import pytest
-from conftest import ApiError, FakeClient, message, search_events, text_delta, thinking_delta
+from conftest import ApiError, FakeClient, message, search_events, text_delta, thinking_delta, tool_use
 
-from asistentas.agent import MAX_CONTINUATIONS, Assistant
+from asistentas.agent import MAX_STEPS, Assistant
 from asistentas.render import Colors, MarkdownStream
 from asistentas.session import Session
 
@@ -38,7 +38,7 @@ def test_atsarginis_modelis_ijungtas(cfg):
 
 
 def test_paieskos_irankis(cfg):
-    tool = assistant(cfg, None).tools()[0]
+    tool = assistant(cfg, None).tools()[0]  # paieška — pirma sąraše
     assert tool["type"] == "web_search_20260209"
     assert tool["name"] == "web_search"
     assert tool["max_uses"] == 5
@@ -49,9 +49,10 @@ def test_paieskos_irankis(cfg):
     }
 
 
-def test_israiska_be_paieskos(cfg):
-    kw = assistant(cfg.with_(search=False), None).request_kwargs()
-    assert "tools" not in kw
+def test_israiska_be_irankiu(cfg):
+    """Išjungus viską, įrankių sąrašo iš viso nesiunčiame."""
+    plikas = cfg.with_(search=False, memory=False, files_roots=())
+    assert "tools" not in assistant(plikas, None).request_kwargs()
 
 
 def test_domenu_ribojimas(cfg):
@@ -201,10 +202,10 @@ def test_pause_turn_tesiamas(cfg):
 
 
 def test_pause_turn_neamzinas(cfg):
-    turns = [([], message(stop_reason="pause_turn")) for _ in range(MAX_CONTINUATIONS)]
+    turns = [([], message(stop_reason="pause_turn")) for _ in range(MAX_STEPS)]
     client = FakeClient(*turns)
     turn = assistant(cfg, client, Session()).ask("klausimas", renderer()[0])
-    assert len(client.calls) == MAX_CONTINUATIONS
+    assert len(client.calls) == MAX_STEPS
     assert any("nutraukiau" in n for n in turn.notes)
 
 
@@ -268,3 +269,158 @@ def test_nutraukus_be_teksto_klausimas_pasalinamas(cfg):
         assistant(cfg, s and client, s).ask("klausimas", renderer()[0])
     assert s.messages == []
     assert s.last_date == ""  # kitą kartą datą pasakysime iš naujo
+
+
+# ---- įrankiai mano kompiuteryje ----------------------------------------
+
+
+def _cfg_with_files(cfg, tmp_path):
+    katalogas = tmp_path / "uzrasai"
+    katalogas.mkdir(parents=True, exist_ok=True)
+    (katalogas / "planas.md").write_text("Terminas: spalio 1 d.\n", encoding="utf-8")
+    return cfg.with_(files_roots=(str(katalogas),))
+
+
+def test_atminties_irankis_ijungtas(cfg):
+    vardai = [t.get("name") for t in assistant(cfg, None).tools()]
+    assert "memory" in vardai
+    assert "Atmintis" in assistant(cfg, None).system_blocks()[0]["text"]
+
+
+def test_atminti_galima_isjungti(cfg):
+    be = cfg.with_(memory=False)
+    assert "memory" not in [t.get("name") for t in assistant(be, None).tools()]
+    assert "Atmintis" not in assistant(be, None).system_blocks()[0]["text"]
+
+
+def test_failu_irankiai_tik_nurodzius_katalogus(cfg, tmp_path):
+    assert [t.get("name") for t in assistant(cfg, None).tools() if t.get("name", "").endswith("_file")] == []
+    su = _cfg_with_files(cfg, tmp_path)
+    vardai = [t.get("name") for t in assistant(su, None).tools()]
+    assert {"list_files", "search_files", "read_file"} <= set(vardai)
+
+
+def test_atminties_irankis_ivykdomas(cfg):
+    """Modelis paprašo įsiminti — įvykdome ir grąžiname rezultatą."""
+    prasymas = message(
+        stop_reason="tool_use",
+        content=[tool_use("memory", {"command": "create", "path": "/memories/apie.md", "file_text": "Vardas: R"})],
+    )
+    client = FakeClient((([], prasymas)), ([text_delta("Įsiminiau.")], message(text="Įsiminiau.")))
+    s = Session()
+    r, _ = renderer()
+    turn = assistant(cfg, client, s).ask("įsimink mano vardą", r)
+
+    assert turn.text == "Įsiminiau." and turn.tool_calls == 1
+    rezultatas = s.messages[-2]                       # po tool_use eina tool_result
+    assert rezultatas["role"] == "user"
+    assert rezultatas["content"][0]["type"] == "tool_result"
+    assert "įrašyta" in rezultatas["content"][0]["content"]
+    assert (cfg.memory_dir / "apie.md").read_text(encoding="utf-8") == "Vardas: R"
+    assert "🧠 įsimenu" in r.err.getvalue()
+
+
+def test_failo_skaitymas_ivykdomas(cfg, tmp_path):
+    su = _cfg_with_files(cfg, tmp_path)
+    prasymas = message(stop_reason="tool_use", content=[tool_use("read_file", {"path": "planas.md"})])
+    client = FakeClient(([], prasymas), ([text_delta("Spalio 1 d.")], message(text="Spalio 1 d.")))
+    s = Session()
+    r, _ = renderer()
+    assistant(su, client, s).ask("kada terminas?", r)
+    assert "Terminas: spalio 1 d." in s.messages[-2]["content"][0]["content"]
+    assert "📄 skaitau: planas.md" in r.err.getvalue()
+
+
+def test_keli_irankiai_grazinami_viena_zinute(cfg, tmp_path):
+    """API reikalauja visų rezultatų vienoje žinutėje — kitaip modelis
+    nustoja kviesti įrankius lygiagrečiai."""
+    su = _cfg_with_files(cfg, tmp_path)
+    prasymas = message(
+        stop_reason="tool_use",
+        content=[
+            tool_use("read_file", {"path": "planas.md"}, "toolu_1"),
+            tool_use("memory", {"command": "view", "path": "/memories"}, "toolu_2"),
+        ],
+    )
+    client = FakeClient(([], prasymas), ([text_delta("ok")], message(text="ok")))
+    s = Session()
+    turn = assistant(su, client, s).ask("ką žinai?", renderer()[0])
+    rezultatai = s.messages[-2]["content"]
+    assert len(rezultatai) == 2 and turn.tool_calls == 2
+    assert [b["tool_use_id"] for b in rezultatai] == ["toolu_1", "toolu_2"]
+
+
+def test_irankio_klaida_grazinama_modeliui(cfg, tmp_path):
+    """Klaida nėra pokalbio pabaiga — modelis turi galimybę pasitaisyti."""
+    su = _cfg_with_files(cfg, tmp_path)
+    prasymas = message(stop_reason="tool_use", content=[tool_use("read_file", {"path": "/etc/passwd"})])
+    client = FakeClient(([], prasymas), ([text_delta("Negaliu to pasiekti.")], message(text="Negaliu to pasiekti.")))
+    s = Session()
+    turn = assistant(su, client, s).ask("parodyk /etc/passwd", renderer()[0])
+    rezultatas = s.messages[-2]["content"][0]
+    assert rezultatas["is_error"] is True
+    assert "nepasiekiamas" in rezultatas["content"]
+    assert turn.text == "Negaliu to pasiekti."
+
+
+def test_nezinomas_irankis(cfg):
+    prasymas = message(stop_reason="tool_use", content=[tool_use("nusiusk_pinigus", {"suma": 100})])
+    client = FakeClient(([], prasymas), ([text_delta("ne")], message(text="ne")))
+    s = Session()
+    assistant(cfg, client, s).ask("x", renderer()[0])
+    assert s.messages[-2]["content"][0]["is_error"] is True
+
+
+def test_irankiu_ciklas_nesisuka_be_galo(cfg):
+    prasymai = [
+        ([], message(stop_reason="tool_use", content=[tool_use("memory", {"command": "view", "path": "/memories"})]))
+        for _ in range(MAX_STEPS)
+    ]
+    client = FakeClient(*prasymai)
+    turn = assistant(cfg, client, Session()).ask("x", renderer()[0])
+    assert len(client.calls) == MAX_STEPS
+    assert any("žingsnių" in n for n in turn.notes)
+
+
+def test_nutraukus_irankiu_cikla_istorija_lieka_taisyklinga(cfg):
+    """Po `tool_use` privalo eiti `tool_result` — kitaip kita užklausa nulūžta."""
+    prasymas = message(stop_reason="tool_use", content=[tool_use("memory", {"command": "view", "path": "/memories"})])
+
+    def nutraukti():
+        yield text_delta("pradėjau")
+        raise KeyboardInterrupt
+
+    client = FakeClient(([], prasymas), (nutraukti(), message()))
+    s = Session()
+    with pytest.raises(KeyboardInterrupt):
+        assistant(cfg, client, s).ask("x", renderer()[0])
+
+    for i, zinute in enumerate(s.messages):
+        for blokas in zinute["content"] if isinstance(zinute["content"], list) else []:
+            if isinstance(blokas, dict) and blokas.get("type") == "tool_use":
+                kitas = s.messages[i + 1]["content"]
+                assert any(b.get("tool_use_id") == blokas["id"] for b in kitas)
+    assert s.messages[-1]["role"] == "assistant"
+
+
+# ---- MCP (Gmail, kalendorius ir kt.) ------------------------------------
+
+
+def test_mcp_serveriai_perduodami(cfg, monkeypatch):
+    su = cfg.with_(
+        mcp_servers=({"pavadinimas": "gmail", "url": "https://mcp.pvz.lt/gmail", "token_env": "GMAIL_TOKEN"},)
+    )
+    monkeypatch.setenv("GMAIL_TOKEN", "slaptas-raktas")
+    kw = assistant(su, None).request_kwargs()
+    assert kw["mcp_servers"] == [
+        {"type": "url", "url": "https://mcp.pvz.lt/gmail", "name": "gmail", "authorization_token": "slaptas-raktas"}
+    ]
+    assert {"type": "mcp_toolset", "mcp_server_name": "gmail"} in kw["tools"]
+    assert "mcp-client-2025-11-20" in kw["betas"]
+
+
+def test_mcp_be_rakto_vis_tiek_jungiasi(cfg, monkeypatch):
+    """Ne kiekvienam serveriui reikia rakto; be jo nieko nelaužome."""
+    su = cfg.with_(mcp_servers=({"pavadinimas": "vietinis", "url": "https://mcp.pvz.lt/x", "token_env": None},))
+    kw = assistant(su, None).request_kwargs()
+    assert "authorization_token" not in kw["mcp_servers"][0]

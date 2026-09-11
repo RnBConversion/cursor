@@ -1,7 +1,9 @@
 """Bendravimas su Claude API.
 
-Vienas klausimas = vienas `ask()` iškvietimas: atsakymas rašomas srautu,
-paieška internete vyksta Anthropic serveriuose, o istorija auga sesijoje.
+Vienas klausimas = vienas `ask()` iškvietimas. Per jį gali įvykti keli
+apsikeitimai su API: paieška internete vyksta Anthropic serveriuose, o
+atmintis ir failai — čia pat, tavo kompiuteryje, todėl jų rezultatus
+grąžiname patys ir laukiame atsakymo toliau.
 """
 
 from __future__ import annotations
@@ -12,16 +14,20 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from asistentas.config import Config
+from asistentas.files import FileTools
+from asistentas.memory import MemoryStore
 from asistentas.pricing import Usage
 from asistentas.session import Session
 
-# Serverinė paieška gali sustoti ties vidiniu ciklo limitu (`pause_turn`);
-# tada užklausą kartojame — serveris tęsia nuo tos vietos.
-MAX_CONTINUATIONS = 5
+# Kiek kartų per vieną klausimą galime kreiptis į API. Riboja ir nutrūkusią
+# serverinę paiešką (`pause_turn`), ir įrankių ciklą, kad klaida nesuktų
+# rato be galo ir nekainuotų.
+MAX_STEPS = 16
 
 # Atsarginis modelis, kai Claude Opus 5 atsisako atsakyti dėl saugumo
 # klasifikatoriaus: serveris pats perleidžia užklausą tinkamam modeliui.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+MCP_BETA = "mcp-client-2025-11-20"
 
 WEEKDAYS_LT = (
     "pirmadienis", "antradienis", "trečiadienis", "ketvirtadienis",
@@ -36,6 +42,26 @@ SEARCH_ERRORS_LT = {
     "unavailable": "paieška laikinai neveikia",
 }
 
+MEMORY_PROMPT = """\
+
+Atmintis
+- Turi atminties įrankį (/memories). Kai klausimas gali būti susijęs su tuo,
+  ką jau žinai apie mane, pirma pasitikrink atmintį.
+- Ilgalaikius dalykus — vardą, kalbą, pomėgius, įrankius, priimtus sprendimus,
+  pasikartojančius darbus — įsirašyk, kad kitą kartą nereikėtų kartoti.
+- Neįsimink slaptažodžių, kodų, banko ar sveikatos duomenų, net jei paminiu.
+- Jei faktas jau atmintyje, iš naujo nerašyk; jei pasikeitė — pataisyk.
+"""
+
+FILES_PROMPT = """\
+
+Mano failai
+- Turi įrankius mano failams skaityti (list_files, search_files, read_file).
+- Kai klausiu apie savo užrašus, dokumentus ar tai, kas „kažkur pas mane
+  užrašyta", ieškok juose, o ne spėk.
+- Failų nekeiti ir negali ištrinti — gali tik skaityti.
+"""
+
 
 @dataclass
 class Turn:
@@ -48,6 +74,7 @@ class Turn:
     refusal: str | None = None
     interrupted: bool = False
     notes: list[str] = field(default_factory=list)
+    tool_calls: int = 0
 
 
 class Assistant:
@@ -56,6 +83,8 @@ class Assistant:
         self.session = session
         self._client = client
         self._fallbacks = config.fallbacks
+        self.memory = MemoryStore(config.memory_dir) if config.memory else None
+        self.files = FileTools(config.files_roots, config.max_file_bytes)
 
     # ---- viešoji dalis -------------------------------------------------
 
@@ -77,8 +106,6 @@ class Assistant:
         self.session.usage = self.session.usage + turn.usage
         return turn
 
-    # ---- užklausos sudėliojimas ---------------------------------------
-
     @property
     def cached_client(self):
         """Jau sukurtas klientas arba None — kad CLI galėtų jį naudoti toliau."""
@@ -90,6 +117,8 @@ class Assistant:
 
             self._client = anthropic.Anthropic()
         return self._client
+
+    # ---- laikas --------------------------------------------------------
 
     def local_now(self) -> datetime:
         tz = self.config.timezone
@@ -121,8 +150,14 @@ class Assistant:
         self.session.add_system(self.today_line())
         self.session.last_date = today
 
+    # ---- užklausos sudėliojimas ---------------------------------------
+
     def system_blocks(self) -> list[dict]:
         text = self.config.persona
+        if self.memory:
+            text += "\n" + MEMORY_PROMPT
+        if self.files.enabled:
+            text += "\n" + FILES_PROMPT
         if not self.config.supports_system_messages:
             # Šis modelis nepriima `system` žinučių pokalbio viduryje, tad
             # data lieka prompte (talpykla atsinaujina kartą per parą).
@@ -130,8 +165,17 @@ class Assistant:
         return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
     def tools(self) -> list[dict]:
-        if not self.config.search:
-            return []
+        tools: list[dict] = []
+        if self.config.search:
+            tools.append(self._search_tool())
+        if self.memory:
+            tools.append(self.memory.to_dict())
+        tools.extend(self.files.definitions())
+        for server in self.config.mcp_servers:
+            tools.append({"type": "mcp_toolset", "mcp_server_name": server["pavadinimas"]})
+        return tools
+
+    def _search_tool(self) -> dict:
         tool: dict = {
             "type": self.config.search_tool_type,
             "name": "web_search",
@@ -153,7 +197,27 @@ class Assistant:
             tool["allowed_domains"] = list(self.config.allowed_domains)
         elif self.config.blocked_domains:
             tool["blocked_domains"] = list(self.config.blocked_domains)
-        return [tool]
+        return tool
+
+    def mcp_servers(self) -> list[dict]:
+        """MCP serveriai (Gmail, kalendorius ir kt.), prie kurių jungiasi API."""
+        import os
+
+        servers = []
+        for entry in self.config.mcp_servers:
+            server = {
+                "type": "url",
+                "url": entry["url"],
+                "name": entry["pavadinimas"],
+            }
+            token_env = entry.get("token_env")
+            if token_env:
+                # Slaptažodžiai gyvena aplinkos kintamuosiuose, ne config.toml.
+                token = os.environ.get(token_env)
+                if token:
+                    server["authorization_token"] = token
+            servers.append(server)
+        return servers
 
     def request_kwargs(self) -> dict:
         thinking: dict = {"type": "adaptive"}
@@ -171,16 +235,22 @@ class Assistant:
         tools = self.tools()
         if tools:
             kwargs["tools"] = tools
+        betas = []
         if self._fallbacks:
-            kwargs["betas"] = [FALLBACK_BETA]
             kwargs["fallbacks"] = "default"
+            betas.append(FALLBACK_BETA)
+        if self.config.mcp_servers:
+            kwargs["mcp_servers"] = self.mcp_servers()
+            betas.append(MCP_BETA)
+        if betas:
+            kwargs["betas"] = betas
         return kwargs
 
     # ---- pokalbio ciklas -----------------------------------------------
 
     def _run(self, turn: Turn, renderer) -> None:
         resuming = False  # ar tęsiame ties `pause_turn` nutrūkusią eilę
-        for _ in range(MAX_CONTINUATIONS):
+        for _ in range(MAX_STEPS):
             try:
                 final = self._stream_once(turn, renderer)
             except Exception as e:  # noqa: BLE001 — tikriname konkrečiai žemiau
@@ -196,18 +266,27 @@ class Assistant:
                 self.session.extend_assistant(content)
             else:
                 self.session.add_assistant(content)
+            resuming = False
             self._collect_sources(final, turn)
             turn.stop_reason = getattr(final, "stop_reason", None)
 
             if turn.stop_reason == "pause_turn":
                 resuming = True
                 continue  # serveris tęsia ten, kur sustojo
+
+            if turn.stop_reason == "tool_use":
+                results = self._run_tools(final, renderer, turn)
+                if not results:
+                    break  # nėra ko vykdyti — nesukame rato be galo
+                self.session.add_tool_results(results)
+                continue
+
             if turn.stop_reason == "refusal":
                 turn.refusal = _refusal_text(final)
             elif turn.stop_reason == "max_tokens":
                 turn.notes.append("atsakymas nutrūko ties ilgio riba")
             return
-        turn.notes.append(f"nutraukiau po {MAX_CONTINUATIONS} tęsinių")
+        turn.notes.append(f"nutraukiau po {MAX_STEPS} žingsnių")
 
     def _stream_once(self, turn: Turn, renderer):
         tool_input = ""
@@ -252,6 +331,62 @@ class Assistant:
                 renderer.thinking_end()
             return stream.get_final_message()
 
+    # ---- įrankiai mano kompiuteryje ------------------------------------
+
+    def _run_tools(self, final, renderer, turn: Turn) -> list[dict]:
+        """Įvykdo modelio prašomus įrankius. Visi rezultatai — viena žinute."""
+        results: list[dict] = []
+        for block in getattr(final, "content", None) or []:
+            if getattr(block, "type", "") != "tool_use":
+                continue
+            name = getattr(block, "name", "") or ""
+            args = getattr(block, "input", None)
+            args = args if isinstance(args, dict) else {}
+            turn.tool_calls += 1
+            renderer.note(self._describe_tool(name, args))
+            try:
+                output = self._call_tool(name, args)
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": str(output),
+                    }
+                )
+            except Exception as e:  # klaidą grąžiname modeliui — jis pasitaisys
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"Klaida: {e}",
+                        "is_error": True,
+                    }
+                )
+        return results
+
+    def _call_tool(self, name: str, args: dict):
+        if self.memory is not None and name == "memory":
+            return self.memory.call(args)
+        if self.files.handles(name):
+            return self.files.call(name, args)
+        raise RuntimeError(f"nežinomas įrankis `{name}`")
+
+    def _describe_tool(self, name: str, args: dict) -> str:
+        if name == "memory":
+            command = args.get("command", "")
+            if command == "view":
+                return "🧠 tikrinu atmintį"
+            if command in ("create", "str_replace", "insert"):
+                return "🧠 įsimenu"
+            if command in ("delete", "rename"):
+                return "🧠 tvarkau atmintį"
+            return "🧠 atmintis"
+        if self.files.handles(name):
+            return self.files.describe(name, args)
+        return f"⚙ {name}"
+
+    # ---- rezultatų surinkimas ------------------------------------------
+
     def _collect_sources(self, final, turn: Turn) -> None:
         seen = {url for _, url in turn.sources}
         for block in getattr(final, "content", None) or []:
@@ -268,16 +403,15 @@ class Assistant:
                 # Serverinio įrankio klaida grįžta ne sąrašu, o objektu.
                 code = getattr(content, "error_code", None)
                 if code:
-                    turn.notes.append(
-                        f"paieška: {SEARCH_ERRORS_LT.get(code, code)}"
-                    )
+                    turn.notes.append(f"paieška: {SEARCH_ERRORS_LT.get(code, code)}")
 
     def _keep_partial(self, turn: Turn) -> None:
         """Nutraukus atsakymą (Ctrl+C) istorija turi likti tvarkinga."""
         if turn.text.strip():
+            self.session.close_dangling_tools("nutraukta")
             self.session.add_assistant([{"type": "text", "text": turn.text}])
         else:
-            self.session.drop_last_user()
+            self.session.rollback_turn()
             self.session.last_date = ""
 
 

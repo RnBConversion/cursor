@@ -29,6 +29,8 @@ komandos
   /pastangos [low|medium|high|xhigh|max]
   /paieska [on|off]       paieška internete
   /mastymas [on|off]      rodyti modelio mąstymą
+  /atmintis [viskas|pamirsk]   ką asistentas apie tave įsiminė
+  /failai                 kuriuos katalogus jis mato
   /asmenybe               kur redaguoti asistento charakterį
   /pagalba                šis sąrašas
   /iseiti                 išeiti (arba Ctrl+D)
@@ -183,6 +185,10 @@ class App:
             self._toggle("search", arg, "paieška")
         elif name == "mastymas":
             self._toggle("show_thinking", arg, "mąstymas")
+        elif name == "atmintis":
+            self._memory(arg)
+        elif name == "failai":
+            self._files()
         elif name == "asmenybe":
             self._dim(f"redaguok: {self.cfg.persona_path}")
         else:
@@ -202,6 +208,59 @@ class App:
             current = not current
         self.cfg = self.cfg.with_(**{field: current})
         self._dim(f"{label}: {'įjungta' if current else 'išjungta'}")
+
+    def _memory(self, arg: str) -> None:
+        """Atmintis turi būti matoma ir ištrinama — tai tavo duomenys."""
+        if not self.cfg.memory:
+            self._dim("atmintis išjungta (config.toml: atmintis = false)")
+            return
+        from asistentas.memory import MemoryStore
+
+        store = MemoryStore(self.cfg.memory_dir)
+        files = store.files()
+
+        if arg == "pamirsk":
+            if not files:
+                self._dim("atmintis ir taip tuščia")
+                return
+            if not self._confirm(f"ištrinti visą atmintį ({lt.count(len(files), 'failą', 'failus', 'failų')})?"):
+                self._dim("palikta")
+                return
+            import shutil
+
+            shutil.rmtree(self.cfg.memory_dir, ignore_errors=True)
+            self._dim("atmintis ištrinta")
+            return
+
+        if not files:
+            self._dim("atmintis tuščia — asistentas dar nieko apie tave neįsirašė")
+            return
+        if arg == "viskas":
+            print(store.read_all(limit=20000))
+            return
+        for name, size in files:
+            print(f"{self.colors.dim}  {name} ({size} B){self.colors.reset}")
+        self._dim("„/atmintis viskas" + '" — turinys, „/atmintis pamirsk" — ištrinti')
+
+    def _files(self) -> None:
+        from asistentas.files import FileTools
+
+        tools = FileTools(self.cfg.files_roots, self.cfg.max_file_bytes)
+        if not tools.configured:
+            self._dim("failų katalogai nenurodyti (config.toml: failu_katalogai)")
+            return
+        for path in tools.configured:
+            ok = path.expanduser().is_dir()
+            zyme = "" if ok else "  (nerastas)"
+            print(f"{self.colors.dim}  {path}{zyme}{self.colors.reset}")
+        self._dim("skaitoma tik — asistentas failų nekeičia")
+
+    def _confirm(self, question: str) -> bool:
+        try:
+            return input(f"{question} (taip/ne) ").strip().lower() in ("taip", "t", "yes", "y")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
 
     def _list_sessions(self) -> None:
         sessions = self.store.list(limit=10)

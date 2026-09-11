@@ -70,6 +70,10 @@ def message(
     return BetaMessage.model_validate(data)
 
 
+def tool_use(name: str, args: dict, block_id: str = "toolu_1") -> dict:
+    return {"type": "tool_use", "id": block_id, "name": name, "input": args}
+
+
 class FakeStream:
     def __init__(self, events, final):
         self._events = events

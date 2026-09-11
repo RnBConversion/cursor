@@ -19,6 +19,19 @@ FORMAT_VERSION = 1
 TITLE_MAX = 60
 
 
+def _tool_uses(message: dict) -> list[dict]:
+    """Įrankių iškvietimai žinutėje (tuščia, jei tai ne asistento eilė)."""
+    if message.get("role") != "assistant":
+        return []
+    content = message.get("content")
+    if not isinstance(content, list):
+        return []
+    return [
+        b for b in content
+        if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+    ]
+
+
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -57,10 +70,41 @@ class Session:
     def add_system(self, text: str) -> None:
         self.messages.append({"role": "system", "content": text})
 
-    def drop_last_user(self) -> None:
-        """Pašalina paskutinę vartotojo žinutę (kai atsakymo taip ir negavome)."""
-        while self.messages and self.messages[-1]["role"] != "assistant":
+    def add_tool_results(self, blocks: list[dict]) -> None:
+        """Visi vieno žingsnio įrankių rezultatai keliauja viena žinute."""
+        self.messages.append({"role": "user", "content": blocks})
+
+    def rollback_turn(self) -> None:
+        """Grąžina istoriją į paskutinę baigtą asistento eilę.
+
+        Naudojama, kai atsakymo taip ir negavome: istorija negali likti
+        nei su neatsakytu klausimu, nei su iškviestu įrankiu be rezultato.
+        """
+        while self.messages:
+            last = self.messages[-1]
+            if last["role"] == "assistant" and not _tool_uses(last):
+                break
             self.messages.pop()
+
+    def close_dangling_tools(self, reason: str) -> None:
+        """Užbaigia pakibusius įrankių iškvietimus (pvz. nutraukus Ctrl+C).
+
+        API reikalauja, kad po kiekvieno `tool_use` eitų `tool_result`.
+        """
+        pending = _tool_uses(self.messages[-1]) if self.messages else []
+        if not pending:
+            return
+        self.add_tool_results(
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block["id"],
+                    "content": reason,
+                    "is_error": True,
+                }
+                for block in pending
+            ]
+        )
 
     @property
     def turns(self) -> int:
