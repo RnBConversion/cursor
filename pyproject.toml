@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asistentas"
+version = "0.1.0"
+description = "Asmeninis AI asistentas terminale (Claude API + paieška internete)"
+requires-python = ">=3.11"
+dependencies = ["anthropic>=1.5"]
+
+[project.scripts]
+asistentas = "asistentas.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["asistentas*"]
