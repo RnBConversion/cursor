@@ -238,3 +238,105 @@ def test_failai_rodo_katalogus(cfg, capsys, tmp_path):
     assert str(katalogas) in isvestis
     assert "(nerastas)" in isvestis          # klaidingas kelias matomas iš karto
     assert "skaitoma tik" in isvestis
+
+
+# ---- balso įvestis ------------------------------------------------------
+
+
+class FakeVoice:
+    def __init__(self, text="kada terminas", ready=True, klaida=None):
+        self._text, self.ready, self._klaida = text, ready, klaida
+        self.kviesta = 0
+
+    def problems(self):
+        return ["įrašymo programos — brew install sox", "atpažinimo variklio — pip install faster-whisper"]
+
+    def capture(self, wait, on_start=None, on_transcribe=None):
+        self.kviesta += 1
+        if self._klaida:
+            raise self._klaida
+        if on_start:
+            on_start()
+        return self._text
+
+
+def test_balsas_padeda_teksta_i_ivesties_eilute(cfg):
+    a = app(cfg)
+    a._voice_input = FakeVoice("kada mano projekto terminas")
+    a._command("/balsas")
+    assert a._pending == "kada mano projekto terminas"
+
+
+def test_balsas_be_irangos_pasako_ka_diegti(cfg, capsys):
+    a = app(cfg)
+    a._voice_input = FakeVoice(ready=False)
+    a._command("/balsas")
+    err = capsys.readouterr().err
+    assert "brew install sox" in err and "faster-whisper" in err
+    assert a._pending == ""
+
+
+def test_balsas_isjungtas_nustatymuose(cfg, capsys):
+    from asistentas.config import Voice
+
+    a = app(cfg.with_(voice=Voice(enabled=False)))
+    a._command("/balsas")
+    assert "išjungta" in capsys.readouterr().out
+
+
+def test_balso_klaida_nenutraukia_pokalbio(cfg, capsys):
+    from asistentas.voice import VoiceError
+
+    a = app(cfg)
+    a._voice_input = FakeVoice(klaida=VoiceError("mikrofonas užimtas"))
+    a._command("/balsas")
+    assert "mikrofonas užimtas" in capsys.readouterr().err
+    assert a._pending == ""
+
+
+def test_tyla_nesiunciama_i_api(cfg, capsys):
+    a = app(cfg)
+    a._voice_input = FakeVoice(text="")
+    a._command("/balsas")
+    assert "negirdėjau" in capsys.readouterr().out
+    assert a._pending == ""
+
+
+def test_nutraukus_irasyma_liekame_pokalbyje(cfg, capsys):
+    a = app(cfg)
+    a._voice_input = FakeVoice(klaida=KeyboardInterrupt())
+    a._command("/balsas")
+    assert "atšaukta" in capsys.readouterr().out
+
+
+def test_atpazinta_teksta_galima_pataisyti(cfg, monkeypatch):
+    """Balsu atpažintas tekstas atsiranda eilutėje, bet paskutinis žodis — tavo."""
+    a = app(cfg)
+    a._pending = "kada mano projekto terminas"
+    monkeypatch.setattr("builtins.input", lambda *_: "kada mano projekto terminas?")
+    assert a._read_line() == "kada mano projekto terminas?"
+    assert a._pending == ""
+
+
+def test_prefill_paduodamas_readline(cfg, monkeypatch):
+    import readline
+
+    ikelta = []
+    monkeypatch.setattr(readline, "insert_text", ikelta.append)
+    monkeypatch.setattr(readline, "set_startup_hook", lambda hook=None: hook and hook())
+    monkeypatch.setattr("builtins.input", lambda *_: "x")
+    a = app(cfg)
+    a._pending = "atpažintas tekstas"
+    a._read_line()
+    assert ikelta == ["atpažintas tekstas"]
+
+
+def test_balsas_vienkartiniam_klausimui_reikia_terminalo(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ASISTENTAS_HOME", str(tmp_path / "a"))
+    monkeypatch.setattr("sys.stdin", type("S", (), {"isatty": lambda self: False, "read": lambda self: ""})())
+    assert cli.main(["--balsas"]) == 2
+    assert "terminalo" in capsys.readouterr().err
+
+
+def test_balso_veiksena_paleidziama_veliava():
+    assert cli.build_parser().parse_args(["--balsas"]).balsas is True

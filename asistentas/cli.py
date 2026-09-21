@@ -29,6 +29,7 @@ komandos
   /pastangos [low|medium|high|xhigh|max]
   /paieska [on|off]       paieška internete
   /mastymas [on|off]      rodyti modelio mąstymą
+  /balsas                 užduoti klausimą balsu
   /atmintis [viskas|pamirsk]   ką asistentas apie tave įsiminė
   /failai                 kuriuos katalogus jis mato
   /asmenybe               kur redaguoti asistento charakterį
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pastangos", choices=config.EFFORT_LEVELS, help="mąstymo gylis")
     p.add_argument("--be-paieskos", action="store_true", help="neieškoti internete")
     p.add_argument("--mastymas", action="store_true", help="rodyti modelio mąstymą")
+    p.add_argument("--balsas", action="store_true", help="klausti balsu, o ne raštu")
     p.add_argument("--tesk", nargs="?", const="", metavar="ID", help="tęsti pokalbį")
     p.add_argument("--kaina", action="store_true", help="visada rodyti kainą")
     p.add_argument("--versija", action="version", version=f"asistentas {__version__}")
@@ -57,13 +59,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class App:
-    def __init__(self, cfg: config.Config, colors: Colors, show_footer: bool):
+    def __init__(
+        self,
+        cfg: config.Config,
+        colors: Colors,
+        show_footer: bool,
+        voice_mode: bool = False,
+    ):
         self.cfg = cfg
         self.colors = colors
         self.store = Store(cfg.sessions_dir)
         self.session = Session(model=cfg.model)
         self.show_footer = show_footer
+        self.voice_mode = voice_mode
         self._client = None
+        self._voice_input = None
+        self._pending = ""      # tekstas, kuris atsiras įvesties eilutėje
 
     # ---- klausimas -----------------------------------------------------
 
@@ -102,8 +113,10 @@ class App:
         print(f"{c.dim}  /pagalba — komandos · Ctrl+D — išeiti{c.reset}\n")
 
         while True:
+            if self.voice_mode and not self._pending:
+                self._pending = self.voice_capture()
             try:
-                line = input(f"{c.bold}{c.cyan}{PROMPT}{c.reset}")
+                line = self._read_line()
             except KeyboardInterrupt:
                 print()
                 continue
@@ -121,6 +134,63 @@ class App:
             print()
             self.ask(line)
             print()
+
+    def _read_line(self) -> str:
+        """Įvesties eilutė. Balsu atpažintas tekstas įrašomas į ją iš anksto,
+        kad prieš siunčiant galėtum pataisyti neteisingai išgirstą žodį."""
+        prefill, self._pending = self._pending, ""
+        prompt = f"{self.colors.bold}{self.colors.cyan}{PROMPT}{self.colors.reset}"
+        if not prefill:
+            return input(prompt)
+        try:
+            import readline
+        except ImportError:
+            self._dim(prefill)
+            return input(prompt) or prefill
+        readline.set_startup_hook(lambda: readline.insert_text(prefill))
+        try:
+            return input(prompt)
+        finally:
+            readline.set_startup_hook()
+
+    # ---- balsas --------------------------------------------------------
+
+    def voice(self):
+        if self._voice_input is None:
+            from asistentas.voice import VoiceInput
+
+            self._voice_input = VoiceInput(self.cfg.voice)
+        return self._voice_input
+
+    def voice_capture(self) -> str:
+        """Įrašo klausimą balsu ir grąžina atpažintą tekstą (arba tuščią)."""
+        from asistentas.voice import VoiceError, wait_for_enter
+
+        if not self.cfg.voice.enabled:
+            self._dim("balso įvestis išjungta (config.toml: [balsas] ijungta = false)")
+            return ""
+        voice = self.voice()
+        if not voice.ready:
+            self._error("balso įvesčiai trūksta:")
+            for problem in voice.problems():
+                self._error(f"  • {problem}")
+            return ""
+        try:
+            text = voice.capture(
+                wait=lambda: wait_for_enter(self.cfg.voice.max_seconds),
+                on_start=lambda: self._dim("🎤 kalbėk… (Enter — baigti, Ctrl+C — atšaukti)"),
+                on_transcribe=lambda: self._dim("⏳ atpažįstu…"),
+            )
+        except KeyboardInterrupt:
+            print()
+            self._dim("(atšaukta)")
+            return ""
+        except VoiceError as e:
+            self._error(str(e))
+            return ""
+        if not text:
+            self._dim("negirdėjau nieko")
+        return text
 
     def _bye(self) -> int:
         if self.session.messages:
@@ -185,6 +255,8 @@ class App:
             self._toggle("search", arg, "paieška")
         elif name == "mastymas":
             self._toggle("show_thinking", arg, "mąstymas")
+        elif name == "balsas":
+            self._pending = self.voice_capture()
         elif name == "atmintis":
             self._memory(arg)
         elif name == "failai":
@@ -413,10 +485,24 @@ def main(argv: list[str] | None = None) -> int:
     if piped:
         question = f"{question}\n\n{piped}" if question else piped
 
-    app = App(cfg, colors, show_footer=colors.enabled or args.kaina)
+    app = App(
+        cfg,
+        colors,
+        show_footer=colors.enabled or args.kaina,
+        voice_mode=args.balsas,
+    )
 
     if args.tesk is not None:
         app._resume(args.tesk)
+
+    if args.balsas and not question:
+        if not sys.stdin.isatty():
+            print("Balsui reikia terminalo.", file=sys.stderr)
+            return 2
+        question = app.voice_capture()
+        if not question:
+            return 1
+        app._dim(f"▸ {question}")
 
     if question:
         return app.ask(question)

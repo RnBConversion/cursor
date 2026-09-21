@@ -81,6 +81,18 @@ atmintis = true
 # Nurodyti katalogai skaitomi (bet niekada nekeičiami ir netrinami).
 # failu_katalogai = ["~/Dokumentai", "~/uzrasai"]
 
+# Balso įvestis: /balsas pokalbyje arba `asistentas --balsas`.
+# Reikia dviejų dalykų kompiuteryje: įrašymo programos (sox / arecord / ffmpeg)
+# ir atpažinimo variklio — paprasčiausia `pip install faster-whisper`.
+[balsas]
+ijungta = true
+kalba = "lt"                 # arba "auto", jei maišai kalbas
+# variklis = "auto"          # auto | faster-whisper | whisper.cpp | komanda
+# modelis = "large-v3"       # faster-whisper; greitesni ir prastesni: "small", "medium"
+# whisper_modelis = "~/modeliai/ggml-large-v3.bin"   # jei naudoji whisper.cpp
+# komanda = "mano-stt --lang {kalba} {failas}"       # arba visai savas variklis
+# maks_sekundes = 120
+
 # MCP serveriai — Gmail, kalendorius, Slack ir kt.
 # Prieigos raktas laikomas aplinkos kintamajame, ne šiame faile.
 # [[mcp]]
@@ -92,6 +104,21 @@ atmintis = true
 
 def _home() -> Path:
     return Path(os.environ.get("ASISTENTAS_HOME", Path.home() / ".asistentas"))
+
+
+@dataclass(frozen=True)
+class Voice:
+    """Balso įvesties nustatymai (nieko neprivaloma — veikia su tuo, kas įdiegta)."""
+
+    enabled: bool = True
+    language: str = "lt"
+    recorder: str = "auto"          # auto | rec | sox | arecord | pw-record | ffmpeg
+    engine: str = "auto"            # auto | faster-whisper | whisper.cpp | komanda
+    whisper_binary: str = "whisper-cli"
+    whisper_model: str = ""
+    model: str = "large-v3"
+    command: str = ""
+    max_seconds: int = 120
 
 
 @dataclass(frozen=True)
@@ -113,6 +140,7 @@ class Config:
     files_roots: tuple[str, ...] = ()
     max_file_bytes: int = 400_000
     mcp_servers: tuple[dict, ...] = ()
+    voice: Voice = field(default_factory=Voice)
     country: str | None = "LT"
     city: str | None = None
     region: str | None = None
@@ -179,6 +207,27 @@ def _read_toml(path: Path) -> dict:
         raise ConfigError(f"{path} sugadintas: {e}") from e
 
 
+def _voice(raw) -> Voice:
+    if raw is None:
+        return Voice()
+    if not isinstance(raw, dict):
+        raise ConfigError("`[balsas]` turi būti lentelė")
+    voice = Voice(
+        enabled=bool(raw.get("ijungta", True)),
+        language=str(raw.get("kalba", "lt")),
+        recorder=str(raw.get("irasymas", "auto")),
+        engine=str(raw.get("variklis", "auto")),
+        whisper_binary=str(raw.get("whisper_binaras", "whisper-cli")),
+        whisper_model=str(raw.get("whisper_modelis", "")),
+        model=str(raw.get("modelis", "large-v3")),
+        command=str(raw.get("komanda", "")),
+        max_seconds=int(raw.get("maks_sekundes", 120)),
+    )
+    if voice.max_seconds < 1:
+        raise ConfigError("`maks_sekundes` turi būti bent 1")
+    return voice
+
+
 def _mcp(raw) -> tuple[dict, ...]:
     """MCP serveriai: Gmail, kalendorius ir visa kita, kas kalba MCP kalba."""
     if raw is None:
@@ -241,6 +290,7 @@ def load(home: Path | None = None, *, create: bool = True) -> Config:
         files_roots=_strings(data.get("failu_katalogai"), "failu_katalogai"),
         max_file_bytes=int(data.get("failu_dydzio_riba", 400_000)),
         mcp_servers=_mcp(data.get("mcp")),
+        voice=_voice(data.get("balsas")),
         country=data.get("salis", "LT"),
         city=data.get("miestas"),
         region=data.get("regionas"),

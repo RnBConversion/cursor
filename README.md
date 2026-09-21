@@ -1,8 +1,9 @@
 # asistentas
 
 Asmeninis AI asistentas, veikiantis tavo terminale. Claude Opus 5 protas,
-paieška internete, ilgalaikė atmintis, prieiga prie tavo failų ir tavo paties
-parašytas charakteris. Pokalbiai ir atmintis lieka tavo kompiuteryje.
+paieška internete, ilgalaikė atmintis, prieiga prie tavo failų, klausimai balsu
+ir tavo paties parašytas charakteris. Pokalbiai ir atmintis lieka tavo
+kompiuteryje.
 
 ```
 tu ▸ kiek dabar kainuoja elektra?
@@ -51,6 +52,7 @@ Pokalbyje:
 | `/modelis`, `/pastangos` | pakeisti modelį ar mąstymo gylį |
 | `/paieska on\|off` | paieška internete |
 | `/mastymas on\|off` | rodyti, ką modelis galvoja |
+| `/balsas` | užduoti klausimą balsu |
 | `/atmintis` | ką jis apie tave įsiminė (`viskas` — turinys, `pamirsk` — ištrinti) |
 | `/failai` | kuriuos katalogus jis mato |
 | `/asmenybe` | kur redaguoti charakterį |
@@ -129,6 +131,48 @@ sąrašą — už jo ribų neišeina net simbolinė nuoroda, `..` ar absoliutus 
 Paslėpti katalogai (`.git`, `.ssh` ir pan.) praleidžiami, dvejetainiai failai
 neskaitomi.
 
+## Balso įvestis
+
+```
+tu ▸ /balsas
+🎤 kalbėk… (Enter — baigti, Ctrl+C — atšaukti)
+⏳ atpažįstu…
+tu ▸ kada mano projekto terminas_
+```
+
+Atpažintas tekstas atsiranda **įvesties eilutėje**, o ne iškart keliauja į
+API: neteisingai išgirstą žodį pataisai ir tik tada spaudi Enter. `--balsas`
+paleidžia asistentą taip, kad kiekvienas klausimas prasidėtų įrašymu.
+
+Reikia dviejų dalykų — nė vienas nėra šio projekto priklausomybė:
+
+```bash
+brew install sox              # macOS  (Linux: sudo apt install sox)
+pip install faster-whisper    # atpažinimo variklis; modelis parsisiunčia pats
+```
+
+Tiek. `/balsas` pats susiras, kas įdiegta, o ko trūksta — pasakys tiksliai,
+kurios komandos trūksta. Vietoj `sox` tinka `arecord`, `pw-record` ar `ffmpeg`;
+vietoj `faster-whisper` — `whisper.cpp` arba visai sava komanda:
+
+```toml
+[balsas]
+kalba = "lt"                 # arba "auto", jei maišai kalbas
+# modelis = "large-v3"       # lietuvių kalbai verta didelio: "small" klysta dažnai
+# variklis = "whisper.cpp"
+# whisper_modelis = "~/modeliai/ggml-large-v3.bin"
+# komanda = "mano-stt --lang {kalba} {failas}"
+# maks_sekundes = 120
+```
+
+Garsas niekur neišeina: įrašas guli laikiname faile, atpažįstamas tavo
+kompiuteryje ir iš karto ištrinamas. Į Anthropic API keliauja tik tekstas —
+tas pats, kurį matai eilutėje.
+
+Lietuvių kalbai realiai reikia `large-v3` (arba `large-v3-turbo`) — mažesni
+modeliai supranta angliškai, bet lietuviškai klysta tiek, kad taisyti ilgiau
+nei parašyti. Pirmas paleidimas užtrunka: modelis parsisiunčiamas.
+
 ## Gmail, kalendorius ir kita (MCP)
 
 Vietoj atskiro kodo kiekvienai paslaugai asistentas jungiasi prie **MCP
@@ -175,6 +219,7 @@ mažiau (footeryje tada matai žodį „talpykla").
 cli.py       pokalbio ciklas, komandos, klaidos žmogiškai
 agent.py     užklausos Claude API: srautas, įrankių ciklas, tęsimas
 render.py    markdown → terminalas, nelaukiant atsakymo pabaigos
+voice.py     balso įvestis: įrašymas ir atpažinimas tavo kompiuteryje
 memory.py    ilgalaikė atmintis (Anthropic atminties įrankis)
 files.py     tavo failų paieška ir skaitymas, griežtai ribotuose kataloguose
 session.py   pokalbiai JSON failuose
@@ -194,6 +239,10 @@ Keli sprendimai, kurie nėra akivaizdūs:
 - **Nutraukus (Ctrl+C) įrankių ciklą** pakibęs iškvietimas uždaromas klaidos
   rezultatu: API reikalauja, kad po kiekvieno `tool_use` eitų `tool_result`,
   antraip kita užklausa nulūžtų.
+- **Prieš sakant „kalbėk" palaukiama, kol mikrofonas realiai atsidarys** —
+  `sox` ir `ffmpeg` pasileidžia ne akimirksniu, o pirmas žodis dingsta tyliai.
+  Jei įrašymas nulūžta (mikrofonas užimtas), sužinai tuoj pat, o ne
+  prakalbėjęs minutę.
 - **Šiandienos data** siunčiama atskira `system` žinute, o ne sistemos prompte:
   taip promptas nesikeičia ir lieka talpykloje. Modeliams, kurie tokių žinučių
   nepriima, data keliauja į promptą.
@@ -219,9 +268,11 @@ tai jau kitas projektas.
 ## Testai
 
 ```bash
-pip install pytest && pytest -q      # 179 testai, tinklo neliečia
+pip install pytest && pytest -q      # 217 testų, tinklo neliečia
 ```
 
 Testai naudoja suklastotą API klientą, todėl nieko nekainuoja ir veikia be rakto.
 Atskirai tikrinama, kad nei atminties, nei failų įrankis neišeitų už jam skirtų
-katalogų — kelius siūlo modelis, tad tai ne smulkmena.
+katalogų — kelius siūlo modelis, tad tai ne smulkmena. Balso grandinė
+tikrinama su netikrais `rec` ir `stt` binarais: taip patikrinamas ir procesų
+sustabdymas, ir įrašo ištrynimas, ir elgesys, kai mikrofono nėra.
