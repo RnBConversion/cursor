@@ -144,10 +144,13 @@ class App:
             return input(prompt)
         try:
             import readline
-        except ImportError:
+
+            readline.set_startup_hook(lambda: readline.insert_text(prefill))
+        except (ImportError, AttributeError, OSError):
+            # Windows readline neturi, macOS libedit gali neturėti kabliuko.
+            # Tada tekstą tiesiog parodome: Enter jį patvirtina.
             self._dim(prefill)
             return input(prompt) or prefill
-        readline.set_startup_hook(lambda: readline.insert_text(prefill))
         try:
             return input(prompt)
         finally:

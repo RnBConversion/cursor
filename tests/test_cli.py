@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from conftest import ApiError, FakeClient, message, text_delta
 
@@ -340,3 +342,27 @@ def test_balsas_vienkartiniam_klausimui_reikia_terminalo(monkeypatch, tmp_path, 
 
 def test_balso_veiksena_paleidziama_veliava():
     assert cli.build_parser().parse_args(["--balsas"]).balsas is True
+
+
+def test_veikia_ir_be_readline(cfg, monkeypatch):
+    """Windows readline neturi — tekstas tada tiesiog parodomas, Enter patvirtina."""
+    monkeypatch.setitem(sys.modules, "readline", None)
+    monkeypatch.setattr("builtins.input", lambda *_: "")
+    a = app(cfg)
+    a._pending = "atpažintas tekstas"
+    assert a._read_line() == "atpažintas tekstas"
+
+
+def test_veikia_kai_readline_neturi_kabliuko(cfg, monkeypatch, capsys):
+    """macOS libedit: prefill gali neveikti — tai neturi nulaužti pokalbio."""
+    import readline
+
+    def nepalaikoma(*_):
+        raise AttributeError("set_startup_hook")
+
+    monkeypatch.setattr(readline, "set_startup_hook", nepalaikoma)
+    monkeypatch.setattr("builtins.input", lambda *_: "")
+    a = app(cfg)
+    a._pending = "atpažintas tekstas"
+    assert a._read_line() == "atpažintas tekstas"
+    assert "atpažintas tekstas" in capsys.readouterr().out

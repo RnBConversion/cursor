@@ -117,7 +117,8 @@ class Recorder:
                 return
             except subprocess.TimeoutExpired:
                 continue
-            except (ProcessLookupError, OSError):
+            except (ProcessLookupError, OSError, ValueError):
+                # ValueError — Windows nepriima SIGINT svetimam procesui.
                 return
         process.kill()
         try:
