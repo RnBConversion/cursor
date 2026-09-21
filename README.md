@@ -22,6 +22,11 @@ Elektros kaina krito iki 0.12 €/kWh.
 
 Reikia Python 3.11+ ir Anthropic API rakto.
 
+> **macOS:** sistemos `python3` dažnai yra 3.9 — su juo neveiks (`tomllib`
+> atsirado 3.11). Pasitikrink `python3 --version`; jei mažiau nei 3.11:
+> `brew install python`. Homebrew Python turi ir tikrą GNU readline, todėl
+> gražiau veikia istorija ir balsu atpažinto teksto taisymas.
+
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
@@ -150,6 +155,17 @@ Reikia dviejų dalykų — nė vienas nėra šio projekto priklausomybė:
 brew install sox              # macOS  (Linux: sudo apt install sox)
 pip install faster-whisper    # atpažinimo variklis; modelis parsisiunčia pats
 ```
+
+> **macOS, pirmas kartas:** sistema paklaus, ar leisti terminalui naudoti
+> mikrofoną. Jei prašymo nepastebėsi arba atmesi, įrašas bus tyla, o asistentas
+> pasakys „negirdėjau nieko" — leidimą įjungsi per System Settings → Privacy &
+> Security → Microphone → Terminal (arba iTerm).
+>
+> **Apple Silicon:** `whisper.cpp` naudoja GPU per Metal ir yra pastebimai
+> greitesnis už faster-whisper, kuris čia suka tik procesorių:
+> `brew install whisper-cpp`, parsisiųsk `ggml-large-v3.bin` ir nurodyk jį
+> `whisper_modelis` eilutėje. Mainai: modelį reikia parsisiųsti pačiam,
+> faster-whisper tai padaro už tave.
 
 Tiek. `/balsas` pats susiras, kas įdiegta, o ko trūksta — pasakys tiksliai,
 kurios komandos trūksta. Vietoj `sox` tinka `arecord`, `pw-record` ar `ffmpeg`;
