@@ -23,16 +23,51 @@ Elektros kaina krito iki 0.12 €/kWh.
 
 Reikia Python 3.11+ ir Anthropic API rakto.
 
-> **macOS:** sistemos `python3` dažnai yra 3.9 — su juo neveiks (`tomllib`
-> atsirado 3.11). Pasitikrink `python3 --version`; jei mažiau nei 3.11:
-> `brew install python`. Homebrew Python turi ir tikrą GNU readline, todėl
-> gražiau veikia istorija ir balsu atpažinto teksto taisymas.
+> **macOS:** sistemos `python3` tebėra 3.9 — su juo neveiks (`tomllib` atsirado
+> 3.11). Homebrew Python turi ir tikrą GNU readline, todėl gražiau veikia
+> istorija bei balsu atpažinto teksto taisymas.
+>
+> ```bash
+> brew install python && exec zsh
+> python3 --version          # turi rodyti 3.12 ar naujesnę
+> ```
+
+### Jei diegimas nepavyko
+
+**`ERROR: File "setup.py" or "setup.cfg" not found ... editable mode`** — tavo
+`pip` per senas. Beveik visada tai reiškia, kad `.venv` sukurta Python 3.9:
+pip 21.2.4 ateina būtent su juo. Sprendimas — naujas Python ir švari aplinka:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-export ANTHROPIC_API_KEY=sk-ant-...      # raktas: console.anthropic.com/settings/keys
-asistentas
+brew install python && exec zsh
+cd ~/asistentas && rm -rf .venv
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/pip install -e .
+```
+
+**`ModuleNotFoundError: No module named 'tomllib'`** — tas pats: paleista su
+Python 3.9. Nuo šiol asistentas tokiu atveju pats pasako, ko trūksta ir ką
+daryti, o ne nulūžta su Python klaida.
+
+**`zsh: command not found: asistentas`** — diegimas nepavyko (žr. aukščiau)
+arba aliasas rodo ne ten. Pasitikrink: `ls ~/asistentas/.venv/bin/asistentas`.
+
+```bash
+python3 --version                     # turi būti 3.11+ (žr. pastabą žemiau)
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip    # senas pip nemoka pyproject.toml
+.venv/bin/pip install -e .
+export ANTHROPIC_API_KEY=sk-ant-...   # raktas: console.anthropic.com/settings/keys
+.venv/bin/asistentas
+```
+
+Kad nereikėtų kaskart rašyti viso kelio:
+
+```bash
+echo 'alias asistentas="$HOME/asistentas/.venv/bin/asistentas"' >> ~/.zshrc
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc
+source ~/.zshrc
 ```
 
 Raktą verta įsidėti į `~/.bashrc` arba `~/.zshrc`, kad nereikėtų kartoti.
