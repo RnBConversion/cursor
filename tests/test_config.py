@@ -134,3 +134,35 @@ def test_raktai_nelaikomi_nustatymuose(home):
     """Prieigos raktas nurodomas aplinkos kintamojo vardu, ne pačiu raktu."""
     assert "token_env" in config.DEFAULT_CONFIG_TOML
     assert "sk-ant" not in config.DEFAULT_CONFIG_TOML
+
+
+def test_ollama_nustatymai(home):
+    config.bootstrap(home)
+    (home / "config.toml").write_text(
+        'tiekejas = "ollama"\n[ollama]\nadresas = "https://ollama.com/"\n'
+        'modelis = "gpt-oss:120b"\nraktas_env = "MANO_RAKTAS"\n',
+        encoding="utf-8",
+    )
+    cfg = config.load(home=home)
+    assert cfg.provider == "ollama"
+    assert cfg.ollama.address == "https://ollama.com"      # pabaigos brūkšnys nuimtas
+    assert cfg.ollama.model == "gpt-oss:120b"
+    assert cfg.ollama.key_env == "MANO_RAKTAS"
+
+
+def test_ollama_numatytai_lokaliai(home):
+    assert config.load(home=home).ollama.address == "http://localhost:11434"
+
+
+def test_blogas_ollama_adresas(home):
+    config.bootstrap(home)
+    (home / "config.toml").write_text('[ollama]\nadresas = "localhost:11434"', encoding="utf-8")
+    with pytest.raises(config.ConfigError, match="http://"):
+        config.load(home=home)
+
+
+def test_nezinomas_tiekejas_nustatymuose(home):
+    config.bootstrap(home)
+    (home / "config.toml").write_text('tiekejas = "openai"', encoding="utf-8")
+    with pytest.raises(config.ConfigError, match="nežinomas tiekėjas"):
+        config.load(home=home)

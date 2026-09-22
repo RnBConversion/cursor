@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 
 from asistentas import __version__, config, lt
 from asistentas.agent import Assistant, Turn
@@ -25,6 +26,7 @@ komandos
   /tesk [id]              tęsti pokalbį (be id — paskutinį)
   /istorija               parodyti šio pokalbio eigą
   /kaina                  kiek iki šiol kainavo ši sesija
+  /tiekejas [anthropic|ollama]  kas galvoja: Claude ar tavo Mac'as
   /modelis [pavadinimas]  parodyti arba pakeisti modelį
   /pastangos [low|medium|high|xhigh|max]
   /paieska [on|off]       paieška internete
@@ -48,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("klausimas", nargs="*", help="klausimas (jei nenurodyta — pokalbis)")
     p.add_argument("--modelis", help="modelis, pvz. claude-opus-5")
+    p.add_argument("--tiekejas", choices=("anthropic", "ollama"), help="kas galvoja")
     p.add_argument("--pastangos", choices=config.EFFORT_LEVELS, help="mąstymo gylis")
     p.add_argument("--be-paieskos", action="store_true", help="neieškoti internete")
     p.add_argument("--mastymas", action="store_true", help="rodyti modelio mąstymą")
@@ -106,9 +109,10 @@ class App:
     def repl(self) -> int:
         self._setup_readline()
         c = self.colors
+        paieska = self.cfg.search and self.cfg.provider != "ollama"
         print(
-            f"{c.dim}  asistentas · {self.cfg.model} · paieška: "
-            f"{'taip' if self.cfg.search else 'ne'}{c.reset}"
+            f"{c.dim}  asistentas · {self.model_label()} · paieška: "
+            f"{'taip' if paieska else 'ne'}{c.reset}"
         )
         print(f"{c.dim}  /pagalba — komandos · Ctrl+D — išeiti{c.reset}\n")
 
@@ -239,13 +243,18 @@ class App:
             self._history()
         elif name == "kaina":
             self._cost()
+        elif name == "tiekejas":
+            self._provider(arg)
         elif name == "modelis":
             if arg:
-                self.cfg = self.cfg.with_(model=arg)
+                if self.cfg.provider == "ollama":
+                    self.cfg = self.cfg.with_(ollama=replace(self.cfg.ollama, model=arg))
+                else:
+                    self.cfg = self.cfg.with_(model=arg)
                 self.session.model = arg
                 self._dim(f"modelis: {arg}")
             else:
-                self._dim(f"modelis: {self.cfg.model}")
+                self._dim(f"modelis: {self.model_label()}")
         elif name == "pastangos":
             if arg in config.EFFORT_LEVELS:
                 self.cfg = self.cfg.with_(effort=arg)
@@ -283,6 +292,37 @@ class App:
             current = not current
         self.cfg = self.cfg.with_(**{field: current})
         self._dim(f"{label}: {'įjungta' if current else 'išjungta'}")
+
+    def _provider(self, arg: str) -> None:
+        """Perjungia variklį pokalbio viduryje — istorija lieka ta pati."""
+        if not arg:
+            self._dim(f"tiekėjas: {self.model_label()}")
+            return
+        if arg not in ("anthropic", "ollama"):
+            self._error("galimi: anthropic, ollama")
+            return
+        self.cfg = self.cfg.with_(provider=arg)
+        self._client = None       # kitam varikliui reikia kito kliento
+        self._dim(f"tiekėjas: {self.model_label()}")
+        if arg == "ollama":
+            self._dim("paieškos internete ir MCP šiuo varikliu nėra")
+
+    def model_label(self) -> str:
+        if self.cfg.provider != "ollama":
+            return self.cfg.model
+        vieta = "lokaliai" if self.local_ollama else "debesyje"
+        return f"ollama {self.cfg.ollama.model} ({vieta})"
+
+    @property
+    def local_ollama(self) -> bool:
+        address = self.cfg.ollama.address
+        return "localhost" in address or "127.0.0.1" in address
+
+    def cost_text(self, usage) -> str:
+        """Lokaliai sukamas modelis nieko nekainuoja — nerodome $0.00."""
+        if self.cfg.provider == "ollama":
+            return "lokaliai" if self.local_ollama else "debesų kreditai"
+        return format_cost(usage.cost(self.cfg.model))
 
     def _memory(self, arg: str) -> None:
         """Atmintis turi būti matoma ir ištrinama — tai tavo duomenys."""
@@ -383,7 +423,7 @@ class App:
     def _cost(self) -> None:
         u = self.session.usage
         self._dim(
-            f"{format_cost(u.cost(self.cfg.model))} · {lt.tokens(u.total_tokens)} · "
+            f"{self.cost_text(u)} · {lt.tokens(u.total_tokens)} · "
             f"{lt.searches(u.searches)} · {lt.questions(self.session.turns)}"
         )
 
@@ -396,7 +436,7 @@ class App:
         for i, (title, url) in enumerate(turn.sources, 1):
             print(f"{c.dim}  {i}. {title[:60]} — {url}{c.reset}")
         u = turn.usage
-        bits = [format_cost(u.cost(self.cfg.model)), f"{lt.number(u.total_tokens)} žet."]
+        bits = [self.cost_text(u), f"{lt.number(u.total_tokens)} žet."]
         if u.searches:
             bits.append(lt.searches(u.searches))
         if u.cache_read_tokens:
@@ -469,8 +509,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Nustatymų klaida: {e}", file=sys.stderr)
         return 2
 
+    if args.tiekejas:
+        cfg = cfg.with_(provider=args.tiekejas)
     if args.modelis:
-        cfg = cfg.with_(model=args.modelis)
+        cfg = cfg.with_(
+            ollama=replace(cfg.ollama, model=args.modelis)
+            if cfg.provider == "ollama"
+            else cfg.ollama,
+            model=args.modelis if cfg.provider != "ollama" else cfg.model,
+        )
     if args.pastangos:
         cfg = cfg.with_(effort=args.pastangos)
     if args.be_paieskos:

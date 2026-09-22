@@ -51,6 +51,9 @@ Paieška internete
 DEFAULT_CONFIG_TOML = """\
 # Asmeninio asistento nustatymai. Pakeitimai galioja nuo kito paleidimo.
 
+# Kas galvoja: "anthropic" (Claude) arba "ollama" (modeliai tavo kompiuteryje).
+tiekejas = "anthropic"
+
 # Modelis. Galingiausias: "claude-opus-5". Pigesni: "claude-sonnet-5", "claude-haiku-4-5".
 modelis = "claude-opus-5"
 
@@ -93,6 +96,14 @@ kalba = "lt"                 # arba "auto", jei maišai kalbas
 # komanda = "mano-stt --lang {kalba} {failas}"       # arba visai savas variklis
 # maks_sekundes = 120
 
+# Ollama: modeliai tavo Mac'e (nieko neišeina į internetą, nieko nekainuoja)
+# arba Ollama debesyje. Veikia atmintis ir failai; paieškos, MCP ir talpyklos
+# Ollama pusėje nėra — tai Anthropic serverių paslaugos.
+[ollama]
+adresas = "http://localhost:11434"   # debesiui: "https://ollama.com"
+modelis = "qwen3:32b"
+raktas_env = "OLLAMA_API_KEY"        # reikalingas tik debesiui
+
 # MCP serveriai — Gmail, kalendorius, Slack ir kt.
 # Prieigos raktas laikomas aplinkos kintamajame, ne šiame faile.
 # [[mcp]]
@@ -104,6 +115,15 @@ kalba = "lt"                 # arba "auto", jei maišai kalbas
 
 def _home() -> Path:
     return Path(os.environ.get("ASISTENTAS_HOME", Path.home() / ".asistentas"))
+
+
+@dataclass(frozen=True)
+class Ollama:
+    """Modeliai tavo kompiuteryje arba Ollama debesyje."""
+
+    address: str = "http://localhost:11434"
+    model: str = "qwen3:32b"
+    key_env: str = "OLLAMA_API_KEY"
 
 
 @dataclass(frozen=True)
@@ -126,6 +146,7 @@ class Config:
     """Vienas nekintamas nustatymų rinkinys vienam paleidimui."""
 
     home: Path
+    provider: str = "anthropic"     # anthropic | ollama
     model: str = DEFAULT_MODEL
     effort: str = "high"
     max_tokens: int = 64000
@@ -141,6 +162,7 @@ class Config:
     max_file_bytes: int = 400_000
     mcp_servers: tuple[dict, ...] = ()
     voice: Voice = field(default_factory=Voice)
+    ollama: Ollama = field(default_factory=Ollama)
     country: str | None = "LT"
     city: str | None = None
     region: str | None = None
@@ -205,6 +227,21 @@ def _read_toml(path: Path) -> dict:
             return tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path} sugadintas: {e}") from e
+
+
+def _ollama(raw) -> Ollama:
+    if raw is None:
+        return Ollama()
+    if not isinstance(raw, dict):
+        raise ConfigError("`[ollama]` turi būti lentelė")
+    address = str(raw.get("adresas") or Ollama.address).strip().rstrip("/")
+    if not address.startswith(("http://", "https://")):
+        raise ConfigError("[ollama] `adresas` turi prasidėti http:// arba https://")
+    return Ollama(
+        address=address,
+        model=str(raw.get("modelis") or Ollama.model),
+        key_env=str(raw.get("raktas_env") or Ollama.key_env),
+    )
 
 
 def _voice(raw) -> Voice:
@@ -291,12 +328,16 @@ def load(home: Path | None = None, *, create: bool = True) -> Config:
         max_file_bytes=int(data.get("failu_dydzio_riba", 400_000)),
         mcp_servers=_mcp(data.get("mcp")),
         voice=_voice(data.get("balsas")),
+        ollama=_ollama(data.get("ollama")),
+        provider=str(os.environ.get("ASISTENTAS_TIEKEJAS") or data.get("tiekejas") or "anthropic"),
         country=data.get("salis", "LT"),
         city=data.get("miestas"),
         region=data.get("regionas"),
         timezone=data.get("laiko_juosta", "Europe/Vilnius"),
         color=os.environ.get("NO_COLOR") is None,
     )
+    if cfg.provider not in ("anthropic", "ollama"):
+        raise ConfigError(f"nežinomas tiekėjas `{cfg.provider}`; galimi: anthropic, ollama")
     if cfg.effort not in EFFORT_LEVELS:
         raise ConfigError(
             f"nežinomos pastangos `{cfg.effort}`; galimos: {', '.join(EFFORT_LEVELS)}"

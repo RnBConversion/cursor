@@ -3,7 +3,8 @@
 Asmeninis AI asistentas, veikiantis tavo terminale. Claude Opus 5 protas,
 paieška internete, ilgalaikė atmintis, prieiga prie tavo failų, klausimai balsu
 ir tavo paties parašytas charakteris. Pokalbiai ir atmintis lieka tavo
-kompiuteryje.
+kompiuteryje — o prireikus ir visas galvojimas: antras variklis yra Ollama,
+sukanti modelius vietoje, be interneto ir be mokesčių.
 
 ```
 tu ▸ kiek dabar kainuoja elektra?
@@ -54,6 +55,7 @@ Pokalbyje:
 | `/sesijos`, `/tesk [id]` | ankstesni pokalbiai |
 | `/istorija` | šio pokalbio eiga |
 | `/kaina` | kiek iki šiol kainavo |
+| `/tiekejas anthropic\|ollama` | kas galvoja: Claude ar tavo Mac'as |
 | `/modelis`, `/pastangos` | pakeisti modelį ar mąstymo gylį |
 | `/paieska on\|off` | paieška internete |
 | `/mastymas on\|off` | rodyti, ką modelis galvoja |
@@ -211,6 +213,54 @@ bibliotekų. Adresas privalo būti `https://`; raktas į `config.toml` nerašoma
 niekada. Veikiančio MCP serverio reikės susirasti arba pasileisti pačiam —
 šis projektas prie jo tik prisijungia.
 
+## Be interneto: Ollama tavo Mac'e
+
+Asistentas moka galvoti dviem varikliais. Antrasis — [Ollama](https://ollama.com):
+modeliai, sukantys tavo kompiuteryje. Jokio rakto, jokių mokesčių, nė vienas
+žodis neišeina iš Mac'o.
+
+```bash
+brew install ollama
+ollama pull qwen3:32b
+```
+
+```
+tu ▸ /tiekejas ollama
+tiekėjas: ollama qwen3:32b (lokaliai)
+paieškos internete ir MCP šiuo varikliu nėra
+
+tu ▸ kaip gaminti cepelinus?
+Bulvės, mėsa, grietinė. Virti 25 min.
+  lokaliai · 664 žet.
+```
+
+Perjungiama pokalbio viduryje — istorija lieka ta pati, tad vieną klausimą gali
+atsakyti lokalus modelis, o kitą, sunkesnį, Claude. Nuolatinį pasirinkimą
+nurodai `tiekejas` eilute `config.toml`.
+
+Veikia ir Ollama debesis (mokama prenumerata): `adresas = "https://ollama.com"`
+ir `export OLLAMA_API_KEY=...`. Tada modeliai dideli, bet duomenys vėl išeina
+iš kompiuterio — prasmė lieka tik kainos, ne privatumo.
+
+| | Claude | Ollama |
+| --- | --- | --- |
+| atmintis, failai | ✓ | ✓ |
+| balso įvestis | ✓ | ✓ |
+| paieška internete | ✓ | — |
+| Gmail, kalendorius (MCP) | ✓ | — |
+| prompto talpykla | ✓ | — |
+| kaina | pagal žetonus | nemokama (lokaliai) |
+
+Kai paieškos nėra, modeliui tai pasakoma sistemos prompte — kad į „kas naujo"
+atsakytų „negaliu patikrinti", o ne prasimanytų.
+
+**Ko realiai tikėtis.** Modelio dydį riboja RAM: 16 GB užtenka 7–14B modeliams,
+32 GB — 27–32B, 64 GB — 70B. Lietuviškai atviri modeliai rašo pastebimai
+prasčiau nei Opus 5, o mažesni dažnai pamiršta pasinaudoti atmintimi ar failų
+paieška — o būtent tuo šis asistentas ir gyvas. Todėl numatytasis variklis
+lieka Claude, o Ollama yra pasirinkimas tada, kai svarbiau privatumas arba
+kai interneto tiesiog nėra.
+
 ## Kiek tai kainuoja
 
 Mokama už sunaudotus žetonus, ne už prenumeratą. Kainos už 1 mln. žetonų:
@@ -234,6 +284,7 @@ mažiau (footeryje tada matai žodį „talpykla").
 ```
 cli.py       pokalbio ciklas, komandos, klaidos žmogiškai
 agent.py     užklausos Claude API: srautas, įrankių ciklas, tęsimas
+ollama.py    antras variklis: modeliai tavo kompiuteryje arba Ollama debesyje
 render.py    markdown → terminalas, nelaukiant atsakymo pabaigos
 voice.py     balso įvestis: įrašymas ir atpažinimas tavo kompiuteryje
 memory.py    ilgalaikė atmintis (Anthropic atminties įrankis)
@@ -246,6 +297,9 @@ lt.py        lietuviška daugiskaita
 
 Keli sprendimai, kurie nėra akivaizdūs:
 
+- **Istorija visada saugoma Anthropic blokais**, net kai atsako Ollama:
+  `ollama.py` verčia į OpenAI formatą tik prieš siunčiant ir atgal. Todėl tą
+  patį pokalbį gali tęsti kitu varikliu, o sesijų failai lieka vienodi.
 - **Paieška ir MCP vyksta Anthropic serveriuose**, o atmintis ir failai — tavo
   kompiuteryje. Todėl vienam klausimui gali prireikti kelių apsikeitimų su API:
   modelis paprašo įrankio, mes jį įvykdome ir grąžiname rezultatą. Ciklas
@@ -291,4 +345,6 @@ Testai naudoja suklastotą API klientą, todėl nieko nekainuoja ir veikia be ra
 Atskirai tikrinama, kad nei atminties, nei failų įrankis neišeitų už jam skirtų
 katalogų — kelius siūlo modelis, tad tai ne smulkmena. Balso grandinė
 tikrinama su netikrais `rec` ir `stt` binarais: taip patikrinamas ir procesų
-sustabdymas, ir įrašo ištrynimas, ir elgesys, kai mikrofono nėra.
+sustabdymas, ir įrašo ištrynimas, ir elgesys, kai mikrofono nėra. Ollama
+tikrinama per tikrą vietinį HTTP serverį — su srautu, įrankių kvietimu ir
+klaidomis, o ne per apsimestinį klientą.

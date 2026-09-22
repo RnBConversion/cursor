@@ -42,6 +42,14 @@ SEARCH_ERRORS_LT = {
     "unavailable": "paieška laikinai neveikia",
 }
 
+NO_SEARCH_PROMPT = """\
+
+Interneto neturi
+- Šis variklis be paieškos. Jei klausimas reikalauja šviežios informacijos
+  (naujienos, kainos, tvarkaraščiai, šiandienos įvykiai), pasakyk tiesiai,
+  kad negali patikrinti, ir nespėliok.
+"""
+
 MEMORY_PROMPT = """\
 
 Atmintis
@@ -63,6 +71,26 @@ Mano failai
 """
 
 
+class AnthropicBackend:
+    """Claude per Anthropic API: paieška, MCP, talpykla, adaptyvus mąstymas."""
+
+    name = "anthropic"
+    server_tools = True
+    prompt_caching = True
+    model = ""
+
+    def stream(self, assistant, turn, renderer):
+        return assistant._anthropic_stream(turn, renderer)
+
+
+def make_backend(config: Config):
+    if config.provider == "ollama":
+        from asistentas.ollama import OllamaBackend
+
+        return OllamaBackend(config.ollama)
+    return AnthropicBackend()
+
+
 @dataclass
 class Turn:
     """Vieno klausimo rezultatas."""
@@ -78,19 +106,25 @@ class Turn:
 
 
 class Assistant:
-    def __init__(self, config: Config, session: Session, client=None):
+    def __init__(self, config: Config, session: Session, client=None, backend=None):
         self.config = config
         self.session = session
         self._client = client
         self._fallbacks = config.fallbacks
         self.memory = MemoryStore(config.memory_dir) if config.memory else None
         self.files = FileTools(config.files_roots, config.max_file_bytes)
+        self.backend = backend if backend is not None else make_backend(config)
+
+    @property
+    def model_name(self) -> str:
+        """Modelis, kurį realiai naudojame (priklauso nuo tiekėjo)."""
+        return self.backend.model if self.backend.name == "ollama" else self.config.model
 
     # ---- viešoji dalis -------------------------------------------------
 
     def ask(self, text: str, renderer) -> Turn:
         """Užduoda klausimą ir rašo atsakymą per `renderer`."""
-        self.session.model = self.config.model
+        self.session.model = self.model_name
         self.session.add_user(text)
         self._add_date_if_needed()
 
@@ -158,21 +192,29 @@ class Assistant:
             text += "\n" + MEMORY_PROMPT
         if self.files.enabled:
             text += "\n" + FILES_PROMPT
+        if not self.search_available:
+            text += "\n" + NO_SEARCH_PROMPT
         if not self.config.supports_system_messages:
             # Šis modelis nepriima `system` žinučių pokalbio viduryje, tad
             # data lieka prompte (talpykla atsinaujina kartą per parą).
             text = f"{text}\n\n{self.today_line()}"
         return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
+    @property
+    def search_available(self) -> bool:
+        """Paieška vyksta Anthropic serveriuose — kitam varikliui jos nėra."""
+        return self.config.search and self.backend.server_tools
+
     def tools(self) -> list[dict]:
         tools: list[dict] = []
-        if self.config.search:
+        if self.search_available:
             tools.append(self._search_tool())
         if self.memory:
             tools.append(self.memory.to_dict())
         tools.extend(self.files.definitions())
-        for server in self.config.mcp_servers:
-            tools.append({"type": "mcp_toolset", "mcp_server_name": server["pavadinimas"]})
+        if self.backend.server_tools:
+            for server in self.config.mcp_servers:
+                tools.append({"type": "mcp_toolset", "mcp_server_name": server["pavadinimas"]})
         return tools
 
     def _search_tool(self) -> dict:
@@ -252,7 +294,7 @@ class Assistant:
         resuming = False  # ar tęsiame ties `pause_turn` nutrūkusią eilę
         for _ in range(MAX_STEPS):
             try:
-                final = self._stream_once(turn, renderer)
+                final = self.backend.stream(self, turn, renderer)
             except Exception as e:  # noqa: BLE001 — tikriname konkrečiai žemiau
                 if self._fallbacks and _is_fallback_error(e):
                     # Šis API arba SDK dar nemoka serverinio atsarginio modelio.
@@ -288,7 +330,9 @@ class Assistant:
             return
         turn.notes.append(f"nutraukiau po {MAX_STEPS} žingsnių")
 
-    def _stream_once(self, turn: Turn, renderer):
+    # ---- srautas -------------------------------------------------------
+
+    def _anthropic_stream(self, turn: Turn, renderer):
         tool_input = ""
         thinking_shown = False
         with self.client().beta.messages.stream(**self.request_kwargs()) as stream:

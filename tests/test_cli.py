@@ -366,3 +366,52 @@ def test_veikia_kai_readline_neturi_kabliuko(cfg, monkeypatch, capsys):
     a._pending = "atpažintas tekstas"
     assert a._read_line() == "atpažintas tekstas"
     assert "atpažintas tekstas" in capsys.readouterr().out
+
+
+# ---- tiekėjo perjungimas ------------------------------------------------
+
+
+def test_tiekejo_perjungimas(cfg, capsys):
+    a = app(cfg)
+    a._command("/tiekejas ollama")
+    assert a.cfg.provider == "ollama"
+    isvestis = capsys.readouterr().out
+    assert "ollama qwen3:32b (lokaliai)" in isvestis
+    assert "paieškos internete ir MCP šiuo varikliu nėra" in isvestis
+    a._command("/tiekejas anthropic")
+    assert a.cfg.provider == "anthropic"
+
+
+def test_nezinomas_tiekejas(cfg, capsys):
+    a = app(cfg)
+    a._command("/tiekejas kazkoks")
+    assert "galimi: anthropic, ollama" in capsys.readouterr().err
+    assert a.cfg.provider == "anthropic"
+
+
+def test_lokalus_modelis_nerodo_kainos(cfg):
+    from asistentas.pricing import Usage
+
+    a = app(cfg.with_(provider="ollama"))
+    assert a.cost_text(Usage(input_tokens=5000)) == "lokaliai"
+
+
+def test_debesies_ollama_rodo_kreditus(cfg):
+    from asistentas.config import Ollama
+    from asistentas.pricing import Usage
+
+    a = app(cfg.with_(provider="ollama", ollama=Ollama(address="https://ollama.com")))
+    assert a.cost_text(Usage(input_tokens=5000)) == "debesų kreditai"
+    assert "debesyje" in a.model_label()
+
+
+def test_modelis_keiciamas_tam_varikliui_kuris_ijungtas(cfg):
+    a = app(cfg.with_(provider="ollama"))
+    a._command("/modelis llama3.3:70b")
+    assert a.cfg.ollama.model == "llama3.3:70b"
+    assert a.cfg.model == "claude-opus-5"      # Claude modelis nepaliestas
+
+
+def test_tiekejas_is_veliavos(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASISTENTAS_HOME", str(tmp_path / "a"))
+    assert cli.build_parser().parse_args(["--tiekejas", "ollama"]).tiekejas == "ollama"
