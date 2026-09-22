@@ -44,6 +44,8 @@ def test_paieskos_irankis(cfg):
     assert tool["max_uses"] == 5
     assert tool["user_location"] == {
         "type": "approximate",
+        "city": "Telšiai",
+        "region": "Telšių apskritis",
         "country": "LT",
         "timezone": "Europe/Vilnius",
     }

@@ -227,7 +227,7 @@ def test_atmintis_isjungta(cfg, capsys):
 
 
 def test_failai_be_nustatymu(cfg, capsys):
-    app(cfg)._command("/failai")
+    app(cfg.with_(files_roots=()))._command("/failai")
     assert "nenurodyti" in capsys.readouterr().out
 
 

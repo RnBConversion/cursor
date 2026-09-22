@@ -73,16 +73,18 @@ paieskos_limitas = 5        # daugiausia paieškų viename atsakyme
 # Vieta — pagal ją parenkami paieškos rezultatai ir skaičiuojama vietos data.
 salis = "LT"
 laiko_juosta = "Europe/Vilnius"
-# miestas = "Vilnius"
-# regionas = "Vilniaus apskritis"
+miestas = "Telšiai"
+regionas = "Telšių apskritis"
 
 # Ilgalaikė atmintis: ką asistentas žino apie tave tarp pokalbių.
 # Turinys — paprasti tekstiniai failai ~/.asistentas/atmintis/.
 atmintis = true
 
-# Tavo failai. Kol sąrašas tuščias, asistentas jų nemato iš viso.
-# Nurodyti katalogai skaitomi (bet niekada nekeičiami ir netrinami).
-# failu_katalogai = ["~/Dokumentai", "~/uzrasai"]
+# Tavo failai. Nurodyti katalogai tik skaitomi (niekada nekeičiami ir netrinami).
+# Pastaba: macOS Finder rodo „Dokumentai", bet tikras kelias diske yra
+# ~/Documents. Surašyti abu saugu — nesamas katalogas tyliai praleidžiamas.
+failu_katalogai = ["~/Dokumentai", "~/Documents"]
+# Galima pridėti ir daugiau, pvz.: "~/uzrasai", "~/Desktop/projektai"
 
 # Balso įvestis: /balsas pokalbyje arba `asistentas --balsas`.
 # Reikia dviejų dalykų kompiuteryje: įrašymo programos (sox / arecord / ffmpeg)

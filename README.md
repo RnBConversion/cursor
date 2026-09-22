@@ -94,10 +94,11 @@ paieska = true
 paieskos_limitas = 5
 salis = "LT"
 laiko_juosta = "Europe/Vilnius"
+miestas = "Telšiai"
 # leidziami_domenai = ["lrt.lt", "delfi.lt"]   # ieškoti tik čia
 
 atmintis = true
-# failu_katalogai = ["~/Dokumentai", "~/uzrasai"]
+failu_katalogai = ["~/Dokumentai", "~/Documents"]
 ```
 
 ## Atmintis
@@ -122,8 +123,8 @@ Išjungti: `atmintis = false`.
 ## Tavo failai
 
 Kol `failu_katalogai` tuščias, asistentas tavo failų **nemato iš viso** — tų
-įrankių jam net nesiunčiame. Nurodžius katalogus, jis gali juose ieškoti ir
-skaityti:
+įrankių jam net nesiunčiame. Numatytame faile jau įrašytas dokumentų katalogas;
+nurodžius katalogus, jis gali juose ieškoti ir skaityti:
 
 ```
 tu ▸ kada mano projekto terminas?
@@ -132,6 +133,10 @@ tu ▸ kada mano projekto terminas?
 📄 skaitau: darbas/planas.md
 Projekto X terminas — spalio 1 d.
 ```
+
+Kelio pastaba macOS: Finder rodo „Dokumentai", bet tikras kelias diske yra
+`~/Documents`. Todėl numatytai surašyti abu — nesamas katalogas tyliai
+praleidžiamas, tad klaidos nebus nei vienu, nei kitu atveju.
 
 Tik skaitymas: failų jis nekeičia ir netrina. Keliai tikrinami pagal tavo
 sąrašą — už jo ribų neišeina net simbolinė nuoroda, `..` ar absoliutus kelias.

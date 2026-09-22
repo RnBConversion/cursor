@@ -95,9 +95,21 @@ def test_atmintis_ir_failai_is_toml(home):
     assert cfg.memory_dir == home / "atmintis"
 
 
-def test_failu_katalogai_numatytai_tusti(home):
-    """Kol nenurodai, kur žiūrėti, asistentas tavo failų nemato."""
+def test_be_nustatymu_failu_nemato(home):
+    """Kol kelias nenurodytas, asistentas failų nemato — numatytoji kodo elgsena."""
+    assert config.Config(home=home).files_roots == ()
+    config.bootstrap(home)
+    (home / "config.toml").write_text("modelis = \"claude-opus-5\"", encoding="utf-8")
     assert config.load(home=home).files_roots == ()
+
+
+def test_numatytas_failas_paruostas_asmeniniam_naudojimui(home):
+    """Sukurtame config.toml vieta ir dokumentų katalogas jau įrašyti."""
+    cfg = config.load(home=home)
+    assert cfg.city == "Telšiai" and cfg.region == "Telšių apskritis"
+    assert cfg.country == "LT" and cfg.timezone == "Europe/Vilnius"
+    # macOS tikras kelias yra ~/Documents, nors Finder rodo „Dokumentai"
+    assert cfg.files_roots == ("~/Dokumentai", "~/Documents")
 
 
 def test_mcp_serveriai(home):
